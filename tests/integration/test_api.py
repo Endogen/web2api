@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -141,7 +142,11 @@ def _error_response(
 
 
 @pytest.mark.asyncio
-async def test_api_routes_and_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_api_routes_and_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     recipes_dir = tmp_path / "recipes"
     _write_recipe(recipes_dir, "alpha", ["read", "search"])
     _write_recipe(recipes_dir, "beta", ["read"])
@@ -186,42 +191,62 @@ async def test_api_routes_and_index(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-            read_resp = await client.get("/alpha/read?page=2")
-            assert read_resp.status_code == 200
-            assert read_resp.json()["endpoint"] == "read"
-            assert read_resp.json()["pagination"]["current_page"] == 2
+            with caplog.at_level(logging.INFO):
+                read_resp = await client.get(
+                    "/alpha/read?page=2",
+                    headers={"x-request-id": "req-alpha-read"},
+                )
+                assert read_resp.status_code == 200
+                assert read_resp.json()["endpoint"] == "read"
+                assert read_resp.json()["pagination"]["current_page"] == 2
+                assert read_resp.headers["x-request-id"] == "req-alpha-read"
 
-            search_resp = await client.get("/alpha/search?q=test&page=1")
-            assert search_resp.status_code == 200
-            assert search_resp.json()["endpoint"] == "search"
-            assert search_resp.json()["query"] == "test"
+                search_resp = await client.get("/alpha/search?q=test&page=1")
+                assert search_resp.status_code == 200
+                assert search_resp.json()["endpoint"] == "search"
+                assert search_resp.json()["query"] == "test"
+                assert search_resp.headers["x-request-id"] != ""
 
-            unsupported_resp = await client.get("/beta/search?q=test")
-            assert unsupported_resp.status_code == 400
-            assert unsupported_resp.json()["error"]["code"] == "CAPABILITY_NOT_SUPPORTED"
+                unsupported_resp = await client.get("/beta/search?q=test")
+                assert unsupported_resp.status_code == 400
+                assert unsupported_resp.json()["error"]["code"] == "CAPABILITY_NOT_SUPPORTED"
 
-            invalid_query_resp = await client.get("/alpha/search")
-            assert invalid_query_resp.status_code == 400
-            assert invalid_query_resp.json()["error"]["code"] == "INVALID_PARAMS"
+                invalid_query_resp = await client.get("/alpha/search")
+                assert invalid_query_resp.status_code == 400
+                assert invalid_query_resp.json()["error"]["code"] == "INVALID_PARAMS"
 
-            unknown_resp = await client.get("/unknown/read")
-            assert unknown_resp.status_code == 404
+                unknown_resp = await client.get("/unknown/read")
+                assert unknown_resp.status_code == 404
 
-            sites_resp = await client.get("/api/sites")
-            assert sites_resp.status_code == 200
-            slugs = {site["slug"] for site in sites_resp.json()}
-            assert slugs == {"alpha", "beta"}
+                sites_resp = await client.get("/api/sites")
+                assert sites_resp.status_code == 200
+                slugs = {site["slug"] for site in sites_resp.json()}
+                assert slugs == {"alpha", "beta"}
 
-            health_resp = await client.get("/health")
-            assert health_resp.status_code == 200
-            assert health_resp.json()["status"] == "ok"
-            assert health_resp.json()["recipes"] == 2
+                health_resp = await client.get("/health")
+                assert health_resp.status_code == 200
+                assert health_resp.json()["status"] == "ok"
+                assert health_resp.json()["recipes"] == 2
 
-            index_resp = await client.get("/")
-            assert index_resp.status_code == 200
-            assert "alpha" in index_resp.text
-            assert "beta" in index_resp.text
-            assert "/alpha/read" in index_resp.text
+                index_resp = await client.get("/")
+                assert index_resp.status_code == 200
+                assert "alpha" in index_resp.text
+                assert "beta" in index_resp.text
+                assert "/alpha/read" in index_resp.text
+
+    assert any(
+        getattr(record, "event", None) == "request.completed"
+        and getattr(record, "path", None) == "/alpha/read"
+        and getattr(record, "request_id", None) == "req-alpha-read"
+        and isinstance(getattr(record, "response_time_ms", None), int)
+        for record in caplog.records
+    )
+    assert any(
+        getattr(record, "event", None) == "request.completed"
+        and getattr(record, "path", None) == "/beta/search"
+        and getattr(record, "status_code", None) == 400
+        for record in caplog.records
+    )
 
     assert fake_pool.started is True
     assert fake_pool.stopped is True

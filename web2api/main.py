@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Literal
 
 from fastapi import FastAPI, Query, Request
@@ -12,12 +14,20 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from web2api.engine import scrape
+from web2api.logging_utils import (
+    REQUEST_ID_HEADER,
+    build_request_id,
+    log_event,
+    reset_request_id,
+    set_request_id,
+)
 from web2api.pool import BrowserPool
 from web2api.registry import Recipe, RecipeRegistry
 from web2api.schemas import ErrorResponse
 
 RouteEndpoint = Callable[..., Any]
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
+logger = logging.getLogger(__name__)
 
 
 def _default_recipes_dir() -> Path:
@@ -96,6 +106,7 @@ def create_app(
     registry: RecipeRegistry | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application."""
+    logging.getLogger("web2api").setLevel(logging.INFO)
     browser_pool = pool or BrowserPool()
     recipe_registry = registry or RecipeRegistry()
     recipe_registry.discover(recipes_dir or _default_recipes_dir())
@@ -116,6 +127,51 @@ def create_app(
         version="0.1.0",
         lifespan=lifespan,
     )
+
+    @app.middleware("http")
+    async def request_logging_middleware(request: Request, call_next: Callable[..., Any]) -> Any:
+        request_id = build_request_id(request.headers.get(REQUEST_ID_HEADER))
+        token = set_request_id(request_id)
+        request.state.request_id = request_id
+        started_at = perf_counter()
+        log_event(
+            logger,
+            logging.INFO,
+            "request.started",
+            method=request.method,
+            path=request.url.path,
+        )
+        try:
+            response = await call_next(request)
+        except Exception as exc:  # noqa: BLE001
+            elapsed_ms = int((perf_counter() - started_at) * 1000)
+            log_event(
+                logger,
+                logging.ERROR,
+                "request.failed",
+                method=request.method,
+                path=request.url.path,
+                response_time_ms=elapsed_ms,
+                error=str(exc),
+                exc_info=exc,
+            )
+            raise
+        else:
+            elapsed_ms = int((perf_counter() - started_at) * 1000)
+            response.headers[REQUEST_ID_HEADER] = request_id
+            log_event(
+                logger,
+                logging.INFO,
+                "request.completed",
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                response_time_ms=elapsed_ms,
+            )
+            return response
+        finally:
+            reset_request_id(token)
+
     _register_recipe_routes(app, recipe_registry)
 
     @app.get("/api/sites")

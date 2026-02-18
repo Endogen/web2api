@@ -89,3 +89,4 @@ web2api/
 - 2026-02-18: E2E coverage lives in `tests/e2e/test_e2e.py`; it runs `docker compose up --build -d`, validates Hacker News read/search and `/api/sites`, and auto-skips when Docker or live network access is unavailable.
 - 2026-02-18: Coverage verification for task 7.4 passed with `pytest tests/unit tests/integration --cov=web2api --cov-report=term-missing --timeout=30` at `TOTAL 86%`, so no additional coverage-gap tests were required to meet the ≥80% target.
 - 2026-02-18: Task 8.1 added a root `README.md` documenting Docker quickstart, API usage, and recipe authoring; examples should stay aligned with the current `/health` response (`status`, `pool`, `recipes`).
+- 2026-02-18: Task 8.2 added structured logging utilities in `web2api/logging_utils.py`, request ID middleware in `web2api/main.py`, and structured scrape/pool/registry events plus tests validating request ID propagation and transform failure warnings.

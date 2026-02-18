@@ -60,5 +60,5 @@
 ## Phase 8: Polish
 
 - [x] 8.1 — Add `README.md` with project overview, quickstart (Docker), recipe authoring guide, API documentation
-- [ ] 8.2 — Add structured logging throughout (request IDs, scrape timing, errors)
+- [x] 8.2 — Add structured logging throughout (request IDs, scrape timing, errors)
 - [ ] 8.3 — Review and clean up: type hints complete, docstrings on public interfaces, remove dead code

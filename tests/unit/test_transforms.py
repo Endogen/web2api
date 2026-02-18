@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from web2api.engine import apply_transform
@@ -41,3 +43,15 @@ def test_iso_date_transform() -> None:
 def test_unknown_transform_raises_error() -> None:
     with pytest.raises(ValueError):
         apply_transform("value", "unknown_transform", base_url="https://example.com")
+
+
+def test_transform_failure_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING):
+        value = apply_transform("no digits here", "regex_int", base_url="https://example.com")
+
+    assert value is None
+    assert any(
+        getattr(record, "event", None) == "transform.failed"
+        and getattr(record, "transform", None) == "regex_int"
+        for record in caplog.records
+    )

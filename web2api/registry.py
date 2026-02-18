@@ -12,6 +12,7 @@ from types import ModuleType
 import yaml
 
 from web2api.config import RecipeConfig, parse_recipe_config
+from web2api.logging_utils import log_event
 from web2api.scraper import BaseScraper
 
 logger = logging.getLogger(__name__)
@@ -36,12 +37,27 @@ class RecipeRegistry:
         """Scan ``recipes_dir`` and register discovered recipes."""
         self._recipes.clear()
         if not recipes_dir.exists() or not recipes_dir.is_dir():
+            log_event(
+                logger,
+                logging.WARNING,
+                "registry.discover_skipped",
+                recipes_dir=str(recipes_dir),
+                reason="missing_or_not_directory",
+            )
             return
 
+        log_event(logger, logging.INFO, "registry.discover_started", recipes_dir=str(recipes_dir))
         for recipe_dir in sorted(path for path in recipes_dir.iterdir() if path.is_dir()):
             try:
                 recipe = self._load_recipe(recipe_dir)
             except Exception as exc:  # noqa: BLE001
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "registry.recipe_invalid",
+                    recipe_dir=recipe_dir.name,
+                    error=str(exc),
+                )
                 logger.warning("Skipping invalid recipe '%s': %s", recipe_dir.name, exc)
                 continue
 
@@ -50,6 +66,13 @@ class RecipeRegistry:
 
             slug = recipe.config.slug
             if slug in self._recipes:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "registry.recipe_duplicate_slug",
+                    recipe_dir=recipe_dir.name,
+                    slug=slug,
+                )
                 logger.warning(
                     "Skipping recipe '%s': duplicate slug '%s'",
                     recipe_dir.name,
@@ -57,6 +80,19 @@ class RecipeRegistry:
                 )
                 continue
             self._recipes[slug] = recipe
+            log_event(
+                logger,
+                logging.INFO,
+                "registry.recipe_loaded",
+                slug=slug,
+                has_custom_scraper=recipe.scraper is not None,
+            )
+        log_event(
+            logger,
+            logging.INFO,
+            "registry.discover_completed",
+            recipe_count=len(self._recipes),
+        )
 
     def get(self, slug: str) -> Recipe | None:
         """Get a discovered recipe by slug."""

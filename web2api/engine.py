@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, datetime
 from time import perf_counter
@@ -11,6 +12,7 @@ from urllib.parse import quote_plus, urljoin
 from playwright.async_api import ElementHandle, Page
 
 from web2api.config import ActionConfig, EndpointConfig, FieldConfig, ItemsConfig, PaginationConfig
+from web2api.logging_utils import log_event
 from web2api.pool import BrowserPool
 from web2api.registry import Recipe
 from web2api.schemas import (
@@ -23,6 +25,8 @@ from web2api.schemas import (
     SiteInfo,
 )
 from web2api.scraper import ScrapeResult
+
+logger = logging.getLogger(__name__)
 
 
 def build_url(endpoint: EndpointConfig, *, page: int, query: str | None = None) -> str:
@@ -89,36 +93,82 @@ def apply_transform(value: Any, transform: str | None, *, base_url: str) -> Any:
     if transform == "strip":
         try:
             return raw_text.strip()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            _log_transform_failure(transform=transform, value=raw_text, error=exc)
             return None
     if transform == "strip_html":
         try:
             return re.sub(r"<[^>]+>", "", raw_text).strip()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            _log_transform_failure(transform=transform, value=raw_text, error=exc)
             return None
     if transform == "regex_int":
         try:
             match = re.search(r"-?\d+", raw_text)
-            return int(match.group(0)) if match else None
-        except Exception:  # noqa: BLE001
+            if match is None:
+                _log_transform_failure(
+                    transform=transform,
+                    value=raw_text,
+                    reason="no_match",
+                )
+                return None
+            return int(match.group(0))
+        except Exception as exc:  # noqa: BLE001
+            _log_transform_failure(transform=transform, value=raw_text, error=exc)
             return None
     if transform == "regex_float":
         try:
             match = re.search(r"-?\d+(?:\.\d+)?", raw_text)
-            return float(match.group(0)) if match else None
-        except Exception:  # noqa: BLE001
+            if match is None:
+                _log_transform_failure(
+                    transform=transform,
+                    value=raw_text,
+                    reason="no_match",
+                )
+                return None
+            return float(match.group(0))
+        except Exception as exc:  # noqa: BLE001
+            _log_transform_failure(transform=transform, value=raw_text, error=exc)
             return None
     if transform == "iso_date":
         try:
-            return _to_iso_date(raw_text)
-        except Exception:  # noqa: BLE001
+            transformed = _to_iso_date(raw_text)
+            if transformed is None:
+                _log_transform_failure(
+                    transform=transform,
+                    value=raw_text,
+                    reason="unparseable_date",
+                )
+            return transformed
+        except Exception as exc:  # noqa: BLE001
+            _log_transform_failure(transform=transform, value=raw_text, error=exc)
             return None
     if transform == "absolute_url":
         try:
             return urljoin(base_url, raw_text)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            _log_transform_failure(transform=transform, value=raw_text, error=exc)
             return None
     raise ValueError(f"unknown transform '{transform}'")
+
+
+def _log_transform_failure(
+    *,
+    transform: str,
+    value: str,
+    reason: str | None = None,
+    error: Exception | None = None,
+) -> None:
+    preview = value if len(value) <= 120 else f"{value[:117]}..."
+    log_event(
+        logger,
+        logging.WARNING,
+        "transform.failed",
+        transform=transform,
+        reason=reason,
+        value_preview=preview,
+        error=str(error) if error is not None else None,
+    )
 
 
 async def detect_pagination(
@@ -148,6 +198,15 @@ async def scrape(
     """Run a scrape and return a unified API response."""
     started_at = perf_counter()
     current_page = max(page, 1)
+    log_event(
+        logger,
+        logging.INFO,
+        "scrape.started",
+        site_slug=recipe.config.slug,
+        endpoint=endpoint,
+        page=current_page,
+        has_query=bool(query),
+    )
 
     if endpoint not in recipe.config.capabilities:
         return _error_response(
@@ -185,6 +244,7 @@ async def scrape(
             message=f"missing endpoint configuration for '{endpoint}'",
         )
 
+    used_custom_scraper = False
     try:
         async with pool.page() as browser_page:
             custom_result = await _run_custom_scraper(
@@ -195,6 +255,7 @@ async def scrape(
                 query=query,
             )
             if custom_result is not None:
+                used_custom_scraper = True
                 result = custom_result
             else:
                 url = build_url(endpoint_config, page=current_page, query=query)
@@ -242,6 +303,17 @@ async def scrape(
 
     items = _normalize_items(result.items)
     elapsed_ms = int((perf_counter() - started_at) * 1000)
+    log_event(
+        logger,
+        logging.INFO,
+        "scrape.completed",
+        site_slug=recipe.config.slug,
+        endpoint=endpoint,
+        page=result.current_page,
+        response_time_ms=elapsed_ms,
+        item_count=len(items),
+        custom_scraper=used_custom_scraper,
+    )
     return ApiResponse(
         site=SiteInfo(
             name=recipe.config.name,
@@ -377,6 +449,18 @@ def _error_response(
     message: str,
 ) -> ApiResponse:
     elapsed_ms = int((perf_counter() - started_at) * 1000)
+    level = logging.ERROR if code in {"SCRAPE_FAILED", "INTERNAL_ERROR"} else logging.WARNING
+    log_event(
+        logger,
+        level,
+        "scrape.failed",
+        site_slug=recipe.config.slug,
+        endpoint=endpoint,
+        page=current_page,
+        response_time_ms=elapsed_ms,
+        error_code=code,
+        error_message=message,
+    )
     return ApiResponse(
         site=SiteInfo(
             name=recipe.config.name,
