@@ -113,13 +113,31 @@ class BrowserPool:
                 contexts[slot.slot_id] = slot.context
 
         for page, slot in active_pages:
-            with suppress(Exception):
-                await page.close()
+            try:
+                await asyncio.wait_for(page.close(), timeout=5.0)
+            except TimeoutError:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "browser_pool.page_close_timeout",
+                    slot_id=slot.slot_id,
+                )
+            except Exception:  # noqa: BLE001
+                pass
             contexts[slot.slot_id] = slot.context
 
-        for context in contexts.values():
-            with suppress(Exception):
-                await context.close()
+        for ctx_slot_id, context in contexts.items():
+            try:
+                await asyncio.wait_for(context.close(), timeout=5.0)
+            except TimeoutError:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "browser_pool.context_close_timeout",
+                    slot_id=ctx_slot_id,
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
         if browser is not None:
             with suppress(Exception):
