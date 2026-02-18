@@ -2,83 +2,93 @@
 
 Turn any website into a REST API by scraping it live with Playwright.
 
-Web2API loads recipe folders from `recipes/` at startup. Each recipe defines selectors, actions, fields, and pagination in YAML. Adding a new folder adds a new API site.
+Web2API loads recipe folders from `recipes/` at startup. Each recipe defines endpoints with selectors, actions, fields, and pagination in YAML. Optional Python scrapers handle interactive or complex sites. Drop a folder — get an API.
 
 ## Features
 
-- FastAPI service with async Playwright scraping
-- Recipe plugin discovery (`recipes/<slug>/recipe.yaml`)
-- Unified JSON schema for `read` and `search` responses
-- Optional per-recipe Python override (`scraper.py`) for complex logic
-- Shared browser/context pool for concurrent requests
-- Docker and docker-compose support
+- **Arbitrary named endpoints** — recipes define as many endpoints as needed (not limited to read/search)
+- **Declarative YAML recipes** with selectors, actions, transforms, and pagination
+- **Custom Python scrapers** for interactive sites (e.g. typing text, waiting for dynamic content)
+- **Shared browser/context pool** for concurrent Playwright requests
+- **Unified JSON response schema** across all recipes and endpoints
+- **Docker deployment** with auto-restart
 
 ## Quickstart (Docker)
 
-### Prerequisites
-
-- Docker
-- Docker Compose (`docker compose`)
-
-### Run
-
 ```bash
-docker compose up --build
+docker compose up --build -d
 ```
 
-Service URL: `http://localhost:8000`
+Service: `http://localhost:8010`
 
 ### Verify
 
 ```bash
-curl -s http://localhost:8000/health | jq
-curl -s http://localhost:8000/api/sites | jq
-curl -s "http://localhost:8000/hackernews/read?page=1" | jq
-curl -s "http://localhost:8000/hackernews/search?q=python&page=1" | jq
+curl -s http://localhost:8010/health | jq
+curl -s http://localhost:8010/api/sites | jq
 ```
 
-## Local Development
+## Included Recipes
+
+### Hacker News (`hackernews`)
 
 ```bash
-source .venv/bin/activate
-uvicorn web2api.main:app --reload --port 8000
+# Front page stories
+curl -s "http://localhost:8010/hackernews/read?page=1" | jq
+
+# Search via Algolia
+curl -s "http://localhost:8010/hackernews/search?q=python&page=1" | jq
 ```
 
-## API Documentation
+### DeepL Translator (`deepl`)
 
-### Endpoints
+```bash
+# German → English
+curl -s "http://localhost:8010/deepl/de-en?q=Hallo%20Welt" | jq
 
-- `GET /` HTML index listing discovered sites and links
-- `GET /health` Service health
-- `GET /api/sites` JSON list of discovered recipes
-- `GET /{site}/read?page=1` Scrape page content for a site
-- `GET /{site}/search?q=<query>&page=1` Scrape search results for a site
+# English → German
+curl -s "http://localhost:8010/deepl/en-de?q=Hello%20world" | jq
+```
 
-### Common Error Behavior
+## API
 
-- Unknown site slug: HTTP `404`
-- Search without `q`: HTTP `400`, error code `INVALID_PARAMS`
-- Unsupported capability on a recipe: HTTP `400`, error code `CAPABILITY_NOT_SUPPORTED`
-- Upstream/browser failure: HTTP `502`, error code `SCRAPE_FAILED`
-- Timeout: HTTP `504`, error code `SCRAPE_TIMEOUT`
+### Discovery
+
+| Endpoint | Description |
+|---|---|
+| `GET /` | HTML index listing all recipes and endpoints |
+| `GET /health` | Service and browser pool health |
+| `GET /api/sites` | JSON list of all recipes with endpoint metadata |
+
+### Recipe Endpoints
+
+All recipe endpoints follow the pattern: `GET /{slug}/{endpoint}?page=1&q=...`
+
+- `page` — pagination (default: 1)
+- `q` — query text (required when `requires_query: true`)
+
+### Error Codes
+
+| HTTP | Code | When |
+|---|---|---|
+| 400 | `INVALID_PARAMS` | Missing required `q` parameter |
+| 400 | `CAPABILITY_NOT_SUPPORTED` | Endpoint not defined for recipe |
+| 404 | — | Unknown recipe or endpoint |
+| 502 | `SCRAPE_FAILED` | Browser/upstream failure |
+| 504 | `SCRAPE_TIMEOUT` | Scrape exceeded timeout |
 
 ### Response Shape
 
-All `read`/`search` endpoints return:
-
 ```json
 {
-  "site": {"name": "Hacker News", "slug": "hackernews", "url": "https://news.ycombinator.com"},
+  "site": { "name": "...", "slug": "...", "url": "..." },
   "endpoint": "read",
   "query": null,
   "items": [
     {
       "title": "Example title",
       "url": "https://example.com",
-      "fields": {
-        "score": 153,
-        "author": "pg"
-      }
+      "fields": { "score": 153, "author": "pg" }
     }
   ],
   "pagination": {
@@ -98,36 +108,32 @@ All `read`/`search` endpoints return:
 }
 ```
 
-## Recipe Authoring Guide
+## Recipe Authoring
 
-### Recipe Layout
+### Layout
 
-```text
+```
 recipes/
   <slug>/
-    recipe.yaml          # required
-    scraper.py           # optional
-    README.md            # optional
+    recipe.yaml     # required — endpoint definitions
+    scraper.py      # optional — custom Python scraper
+    README.md       # optional — documentation
 ```
 
-Rules:
-
 - Folder name must match `slug`
-- Restart the server to discover new or changed recipes
+- Restart the service to pick up new or changed recipes
 - Invalid recipes are skipped with warning logs
 
-### Minimal `recipe.yaml`
+### Example: Declarative Endpoints
 
 ```yaml
 name: "Example Site"
 slug: "examplesite"
 base_url: "https://example.com"
-description: "Example read and search API"
-capabilities:
-  - read
-  - search
+description: "Scrapes example.com listings and search"
 endpoints:
   read:
+    description: "Browse listings"
     url: "https://example.com/list?page={page}"
     actions:
       - type: wait
@@ -149,8 +155,9 @@ endpoints:
       start: 1
 
   search:
+    description: "Search listings"
+    requires_query: true
     url: "https://example.com/search?q={query}&page={page_zero}"
-    actions: []
     items:
       container: ".result"
       fields:
@@ -163,65 +170,93 @@ endpoints:
       start: 0
 ```
 
-### Supported Actions
+### Endpoint Config Fields
 
-- `wait` (`selector`, optional `timeout`)
-- `click` (`selector`)
-- `scroll` (`direction`, `amount`)
-- `type` (`selector`, `text`)
-- `sleep` (`ms`)
-- `evaluate` (`script`)
+| Field | Required | Description |
+|---|---|---|
+| `url` | yes | URL template with `{page}`, `{page_zero}`, `{query}` placeholders |
+| `description` | no | Human-readable endpoint description |
+| `requires_query` | no | If `true`, the `q` parameter is mandatory (default: `false`) |
+| `actions` | no | Playwright actions to run before extraction |
+| `items` | yes | Container selector + field definitions |
+| `pagination` | yes | Pagination strategy (`page_param`, `offset_param`, or `next_link`) |
 
-### Supported Transforms
+### Actions
 
-- `strip`
-- `strip_html`
-- `regex_int`
-- `regex_float`
-- `iso_date`
-- `absolute_url`
+| Type | Parameters |
+|---|---|
+| `wait` | `selector`, `timeout` (optional) |
+| `click` | `selector` |
+| `scroll` | `direction` (down/up), `amount` (pixels or "bottom") |
+| `type` | `selector`, `text` |
+| `sleep` | `ms` |
+| `evaluate` | `script` |
+
+### Transforms
+
+`strip` · `strip_html` · `regex_int` · `regex_float` · `iso_date` · `absolute_url`
 
 ### Field Context
 
-- `self` (default)
-- `next_sibling`
-- `parent`
+`self` (default) · `next_sibling` · `parent`
 
-### Optional Custom Scraper
+### Custom Scraper
 
-Use `scraper.py` when declarative YAML is not enough:
+For interactive or complex sites, add a `scraper.py` with a `Scraper` class:
 
 ```python
 from playwright.async_api import Page
-
 from web2api.scraper import BaseScraper, ScrapeResult
 
 
 class Scraper(BaseScraper):
-    async def read(self, page: Page, params: dict) -> ScrapeResult:
-        # The page is BLANK — you must navigate to the target URL yourself.
-        await page.goto(f"https://example.com/items?page={params['page']}")
-        # Custom scraping logic ...
-        return ScrapeResult(items=[], current_page=params["page"], has_next=False, has_prev=False)
+    def supports(self, endpoint: str) -> bool:
+        return endpoint in {"de-en", "en-de"}
+
+    async def scrape(self, endpoint: str, page: Page, params: dict) -> ScrapeResult:
+        # page is BLANK — navigate yourself
+        await page.goto("https://example.com")
+        # ... interact with the page ...
+        return ScrapeResult(
+            items=[{"title": "result", "fields": {"key": "value"}}],
+            current_page=params["page"],
+            has_next=False,
+        )
 ```
 
-> **Note:** The `page` passed to `read()` and `search()` is a **blank** Playwright page — no URL
-> has been loaded. Your scraper is responsible for calling `await page.goto(...)` to navigate to the
-> target site before extracting data.
+- `supports(endpoint)` — declare which endpoints use custom scraping
+- `scrape(endpoint, page, params)` — `page` is blank, you must `goto()` yourself
+- `params` contains `page` (int) and `query` (str | None)
+- Endpoints not handled by the scraper fall back to declarative YAML
 
-If custom methods are not implemented, Web2API falls back to declarative YAML for that endpoint.
+## Configuration
 
-## Reference Recipe
+Environment variables (with defaults):
 
-- `recipes/hackernews/recipe.yaml`
-- `recipes/hackernews/README.md`
-
-Use this recipe as a template for new sites.
+| Variable | Default | Description |
+|---|---|---|
+| `POOL_MAX_CONTEXTS` | 5 | Max browser contexts in pool |
+| `POOL_CONTEXT_TTL` | 50 | Requests per context before recycling |
+| `POOL_ACQUIRE_TIMEOUT` | 30 | Seconds to wait for a context |
+| `POOL_PAGE_TIMEOUT` | 15000 | Page navigation timeout (ms) |
+| `POOL_QUEUE_SIZE` | 20 | Max queued requests |
+| `SCRAPE_TIMEOUT` | 30 | Overall scrape timeout (seconds) |
+| `RECIPES_DIR` | `./recipes` | Path to recipes directory |
+| `LOG_LEVEL` | `info` | Log level |
 
 ## Testing
 
 ```bash
-source .venv/bin/activate
-ruff check . --fix && ruff format .
+# Inside the container or with deps installed:
 pytest tests/unit tests/integration --timeout=30 -x -q
 ```
+
+## Tech Stack
+
+- Python 3.12 + FastAPI + Playwright (Chromium)
+- Pydantic for config validation
+- Docker for deployment
+
+## License
+
+MIT
