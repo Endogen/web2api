@@ -4,7 +4,7 @@ STATUS: PLANNING_COMPLETE
 
 ## Phase 1: Project Skeleton & Core Models
 
-- [ ] 1.1 — Set up Python project structure: `pyproject.toml` with dependencies (fastapi, uvicorn, playwright, pyyaml, pydantic), `web2api/` package with `__init__.py`, `main.py` entry point
+- [x] 1.1 — Set up Python project structure: `pyproject.toml` with dependencies (fastapi, uvicorn, playwright, pyyaml, pydantic), `web2api/` package with `__init__.py`, `main.py` entry point
 - [ ] 1.2 — Define Pydantic models for recipe config: `RecipeConfig`, `EndpointConfig`, `ItemsConfig`, `FieldConfig`, `ActionConfig`, `PaginationConfig` (from `specs/recipe-format.md`)
 - [ ] 1.3 — Define Pydantic models for unified API response: `SiteInfo`, `ItemResponse`, `PaginationResponse`, `MetadataResponse`, `ErrorResponse`, `ApiResponse` (from `specs/api-schema.md`)
 - [ ] 1.4 — Define `BaseScraper` abstract class with `read()`, `search()`, `supports_read()`, `supports_search()` methods and `ScrapeResult` dataclass
