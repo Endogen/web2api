@@ -7,7 +7,7 @@ STATUS: PLANNING_COMPLETE
 - [x] 1.1 — Set up Python project structure: `pyproject.toml` with dependencies (fastapi, uvicorn, playwright, pyyaml, pydantic), `web2api/` package with `__init__.py`, `main.py` entry point
 - [x] 1.2 — Define Pydantic models for recipe config: `RecipeConfig`, `EndpointConfig`, `ItemsConfig`, `FieldConfig`, `ActionConfig`, `PaginationConfig` (from `specs/recipe-format.md`)
 - [x] 1.3 — Define Pydantic models for unified API response: `SiteInfo`, `ItemResponse`, `PaginationResponse`, `MetadataResponse`, `ErrorResponse`, `ApiResponse` (from `specs/api-schema.md`)
-- [ ] 1.4 — Define `BaseScraper` abstract class with `read()`, `search()`, `supports_read()`, `supports_search()` methods and `ScrapeResult` dataclass
+- [x] 1.4 — Define `BaseScraper` abstract class with `read()`, `search()`, `supports_read()`, `supports_search()` methods and `ScrapeResult` dataclass
 - [ ] 1.5 — Write unit tests for config model validation: valid configs parse, invalid configs raise errors, defaults applied, slug matching
 
 ## Phase 2: Recipe Discovery & Plugin System
