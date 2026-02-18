@@ -8,7 +8,7 @@ STATUS: PLANNING_COMPLETE
 - [x] 1.2 — Define Pydantic models for recipe config: `RecipeConfig`, `EndpointConfig`, `ItemsConfig`, `FieldConfig`, `ActionConfig`, `PaginationConfig` (from `specs/recipe-format.md`)
 - [x] 1.3 — Define Pydantic models for unified API response: `SiteInfo`, `ItemResponse`, `PaginationResponse`, `MetadataResponse`, `ErrorResponse`, `ApiResponse` (from `specs/api-schema.md`)
 - [x] 1.4 — Define `BaseScraper` abstract class with `read()`, `search()`, `supports_read()`, `supports_search()` methods and `ScrapeResult` dataclass
-- [ ] 1.5 — Write unit tests for config model validation: valid configs parse, invalid configs raise errors, defaults applied, slug matching
+- [x] 1.5 — Write unit tests for config model validation: valid configs parse, invalid configs raise errors, defaults applied, slug matching
 
 ## Phase 2: Recipe Discovery & Plugin System
 
