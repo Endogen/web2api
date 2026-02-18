@@ -208,13 +208,25 @@ def create_app(
         return [_site_payload(recipe) for recipe in recipe_registry.list_all()]
 
     @app.get("/health")
-    async def health() -> dict[str, Any]:
+    async def health() -> JSONResponse:
         """Return service and browser pool health status."""
-        return {
-            "status": "ok",
-            "pool": browser_pool.health,
-            "recipes": recipe_registry.count,
-        }
+        pool_health = browser_pool.health
+        if not pool_health["browser_connected"]:
+            return JSONResponse(
+                content={
+                    "status": "degraded",
+                    "pool": pool_health,
+                    "recipes": recipe_registry.count,
+                },
+                status_code=503,
+            )
+        return JSONResponse(
+            content={
+                "status": "ok",
+                "pool": pool_health,
+                "recipes": recipe_registry.count,
+            },
+        )
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
