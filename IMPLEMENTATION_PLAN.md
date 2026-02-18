@@ -38,12 +38,12 @@ STATUS: PLANNING_COMPLETE
 
 ## Phase 5: API Routes & Index Page
 
-- [ ] 5.1 — Implement dynamic route registration: on startup, iterate recipes and register `GET /{slug}/read` and `GET /{slug}/search` handlers based on capabilities
-- [ ] 5.2 — Implement route handlers: parse query params (page, q), call scraping engine, return unified JSON response, handle errors with proper HTTP status codes
-- [ ] 5.3 — Implement `GET /api/sites` endpoint: return JSON list of all recipes with metadata and capabilities
-- [ ] 5.4 — Implement `GET /health` endpoint: return server and browser pool health status
-- [ ] 5.5 — Implement `GET /` index page: server-rendered HTML (Jinja2) listing all recipes with name, description, capabilities, and "try it" links
-- [ ] 5.6 — Write integration tests for API: valid read/search responses, 404 for unknown slug, 400 for unsupported capability, sites listing, health endpoint, index page renders
+- [x] 5.1 — Implement dynamic route registration: on startup, iterate recipes and register `GET /{slug}/read` and `GET /{slug}/search` handlers based on capabilities
+- [x] 5.2 — Implement route handlers: parse query params (page, q), call scraping engine, return unified JSON response, handle errors with proper HTTP status codes
+- [x] 5.3 — Implement `GET /api/sites` endpoint: return JSON list of all recipes with metadata and capabilities
+- [x] 5.4 — Implement `GET /health` endpoint: return server and browser pool health status
+- [x] 5.5 — Implement `GET /` index page: server-rendered HTML (Jinja2) listing all recipes with name, description, capabilities, and "try it" links
+- [x] 5.6 — Write integration tests for API: valid read/search responses, 404 for unknown slug, 400 for unsupported capability, sites listing, health endpoint, index page renders
 
 ## Phase 6: Hacker News Reference Recipe
 

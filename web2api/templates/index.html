@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Web2API</title>
+    <style>
+      body {
+        font-family: "Segoe UI", sans-serif;
+        margin: 2rem;
+        color: #1f2933;
+      }
+
+      h1 {
+        margin-bottom: 0.5rem;
+      }
+
+      .subtitle {
+        color: #52606d;
+        margin-bottom: 1.5rem;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid #d9e2ec;
+        padding: 0.75rem;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #f0f4f8;
+      }
+
+      .capability {
+        display: inline-block;
+        margin-right: 0.5rem;
+        padding: 0.15rem 0.5rem;
+        border-radius: 999px;
+        background: #e4f7ec;
+        color: #127947;
+        font-size: 0.85rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Web2API</h1>
+    <p class="subtitle">Available scraped APIs discovered from the <code>recipes/</code> directory.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Site</th>
+          <th>Description</th>
+          <th>Capabilities</th>
+          <th>Try It</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for site in sites %}
+        <tr>
+          <td>
+            <strong>{{ site.name }}</strong><br />
+            <code>{{ site.slug }}</code>
+          </td>
+          <td>{{ site.description }}</td>
+          <td>
+            {% for capability in site.capabilities %}
+            <span class="capability">{{ capability }}</span>
+            {% endfor %}
+          </td>
+          <td>
+            {% if site.links.read %}
+            <a href="{{ site.links.read }}">read</a>
+            {% endif %}
+            {% if site.links.search %}
+            {% if site.links.read %} | {% endif %}
+            <a href="{{ site.links.search }}?q=example">search</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </body>
+</html>
