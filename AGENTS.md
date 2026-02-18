@@ -84,3 +84,4 @@ web2api/
 - 2026-02-18: Backpressure commands succeeded in this environment (`ruff` available and `pytest ... --timeout=30` works inside `.venv`), indicating the toolchain is provisioned for local unit/integration runs.
 - 2026-02-18: Live Hacker News integration coverage is implemented in `tests/integration/test_hackernews_live.py`, gated by `WEB2API_RUN_LIVE_HN_TESTS=1` and auto-skipping when DNS/browser sandbox errors make real-site access unavailable.
 - 2026-02-18: Current backpressure baseline is fast in this repo state (`pytest tests/unit tests/integration --timeout=30 -x -q` completed with `30 passed, 1 skipped` in under a second).
+- 2026-02-18: Docker task 7.1 added a root `Dockerfile` using `python:3.12-slim`, installing the app via `pip install .` and Playwright Chromium via `playwright install --with-deps chromium`.
