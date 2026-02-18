@@ -13,7 +13,7 @@ STATUS: PLANNING_COMPLETE
 ## Phase 2: Recipe Discovery & Plugin System
 
 - [x] 2.1 — Implement `RecipeRegistry`: scan `recipes/` dir, parse `recipe.yaml` files with Pydantic, load optional `scraper.py` modules, store as `Recipe` objects
-- [ ] 2.2 — Implement validation logic: slug-folder match check, capability-endpoint consistency, duplicate slug detection (warn + skip), graceful handling of invalid recipes
+- [x] 2.2 — Implement validation logic: slug-folder match check, capability-endpoint consistency, duplicate slug detection (warn + skip), graceful handling of invalid recipes
 - [ ] 2.3 — Write integration tests for discovery: valid recipe loaded, invalid recipe skipped, empty dir handled, duplicate slugs warned, custom scraper loaded
 
 ## Phase 3: Browser Pool

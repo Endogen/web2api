@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from importlib import util
+from importlib.machinery import ModuleSpec
 from pathlib import Path
+from types import ModuleType
 
 import yaml
 
-from web2api.config import RecipeConfig
+from web2api.config import RecipeConfig, parse_recipe_config
 from web2api.scraper import BaseScraper
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -30,14 +35,28 @@ class RecipeRegistry:
     def discover(self, recipes_dir: Path) -> None:
         """Scan ``recipes_dir`` and register discovered recipes."""
         self._recipes.clear()
-        if not recipes_dir.exists():
+        if not recipes_dir.exists() or not recipes_dir.is_dir():
             return
 
         for recipe_dir in sorted(path for path in recipes_dir.iterdir() if path.is_dir()):
-            recipe = self._load_recipe(recipe_dir)
+            try:
+                recipe = self._load_recipe(recipe_dir)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Skipping invalid recipe '%s': %s", recipe_dir.name, exc)
+                continue
+
             if recipe is None:
                 continue
-            self._recipes[recipe.config.slug] = recipe
+
+            slug = recipe.config.slug
+            if slug in self._recipes:
+                logger.warning(
+                    "Skipping recipe '%s': duplicate slug '%s'",
+                    recipe_dir.name,
+                    slug,
+                )
+                continue
+            self._recipes[slug] = recipe
 
     def get(self, slug: str) -> Recipe | None:
         """Get a discovered recipe by slug."""
@@ -57,8 +76,14 @@ class RecipeRegistry:
         if not recipe_config_path.exists():
             return None
 
-        recipe_data = yaml.safe_load(recipe_config_path.read_text(encoding="utf-8")) or {}
-        config = RecipeConfig.model_validate(recipe_data)
+        raw_data = yaml.safe_load(recipe_config_path.read_text(encoding="utf-8"))
+        if raw_data is None:
+            raise ValueError(f"{recipe_config_path} is empty")
+        if not isinstance(raw_data, dict):
+            raise ValueError(f"{recipe_config_path} must contain a YAML mapping")
+
+        recipe_data = {str(key): value for key, value in raw_data.items()}
+        config = parse_recipe_config(recipe_data, folder_name=recipe_dir.name)
         scraper = self._load_scraper(recipe_dir)
         return Recipe(config=config, scraper=scraper, path=recipe_dir)
 
@@ -72,14 +97,22 @@ class RecipeRegistry:
         if spec is None or spec.loader is None:
             raise ImportError(f"failed to load scraper module from {scraper_path}")
 
-        module = util.module_from_spec(spec)
+        module = self._load_module(spec)
         spec.loader.exec_module(module)
 
         scraper_cls = getattr(module, "Scraper", None)
         if scraper_cls is None:
-            return None
+            raise ValueError(f"{scraper_path} must define a Scraper class")
 
         scraper = scraper_cls()
         if not isinstance(scraper, BaseScraper):
             raise TypeError(f"{scraper_path} Scraper must subclass BaseScraper")
         return scraper
+
+    @staticmethod
+    def _load_module(spec: ModuleSpec) -> ModuleType:
+        """Create a module instance for a recipe scraper spec."""
+        module = util.module_from_spec(spec)
+        if not isinstance(module, ModuleType):
+            raise ImportError("failed to create module object for scraper")
+        return module
