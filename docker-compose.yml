@@ -15,6 +15,8 @@ services:
       SCRAPE_TIMEOUT: "${SCRAPE_TIMEOUT:-30}"
       RECIPES_DIR: "${RECIPES_DIR:-./recipes}"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
+      BIRD_AUTH_TOKEN: "${BIRD_AUTH_TOKEN:-}"
+      BIRD_CT0: "${BIRD_CT0:-}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
