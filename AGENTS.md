@@ -13,19 +13,26 @@ Web2API — a platform that turns any website into a REST API by scraping target
 - **Templates:** Jinja2 (index page)
 - **Container:** Docker (Python 3.12-slim + Playwright + Chromium)
 
+## Environment
+A pre-provisioned venv exists at `.venv/` with all dependencies installed (fastapi, playwright, pytest, ruff, etc.).
+Always activate it before running commands:
+```bash
+source .venv/bin/activate
+```
+
 ## Commands
-- **Install:** `pip install -e ".[dev]"`
-- **Run:** `uvicorn web2api.main:app --reload --port 8000`
-- **Test (unit + integration):** `pytest tests/unit tests/integration --timeout=30 -v`
-- **Test (E2E, requires Docker):** `pytest tests/e2e -v`
-- **Coverage:** `pytest tests/unit tests/integration --cov=web2api --cov-report=term-missing --timeout=30`
-- **Lint:** `ruff check . --fix`
-- **Format:** `ruff format .`
+- **Install:** `source .venv/bin/activate && pip install -e ".[dev]"`
+- **Run:** `source .venv/bin/activate && uvicorn web2api.main:app --reload --port 8000`
+- **Test (unit + integration):** `source .venv/bin/activate && pytest tests/unit tests/integration --timeout=30 -v`
+- **Test (E2E, requires Docker):** `source .venv/bin/activate && pytest tests/e2e -v`
+- **Coverage:** `source .venv/bin/activate && pytest tests/unit tests/integration --cov=web2api --cov-report=term-missing --timeout=30`
+- **Lint:** `source .venv/bin/activate && ruff check . --fix`
+- **Format:** `source .venv/bin/activate && ruff format .`
 
 ## Backpressure
 Run these after EACH implementation (in order):
-1. `ruff check . --fix && ruff format .`
-2. `pytest tests/unit tests/integration --timeout=30 -x -q` (stop on first failure)
+1. `source .venv/bin/activate && ruff check . --fix && ruff format .`
+2. `source .venv/bin/activate && pytest tests/unit tests/integration --timeout=30 -x -q` (stop on first failure)
 
 ## Project Structure
 ```
@@ -71,3 +78,4 @@ web2api/
 
 ## Learnings
 <!-- Agent appends operational notes here during execution -->
+- 2026-02-18: This sandbox does not have `ruff`/`pytest` preinstalled and cannot reach PyPI, so backpressure commands require a pre-provisioned toolchain or offline package mirror.
