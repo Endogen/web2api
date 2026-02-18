@@ -26,15 +26,15 @@ STATUS: PLANNING_COMPLETE
 
 ## Phase 4: Scraping Engine
 
-- [ ] 4.1 — Implement URL template builder: substitute `{page}`, `{page_zero}`, `{query}` with proper URL encoding, handle page number mapping per recipe's pagination start value
-- [ ] 4.2 — Implement action executor: process action list sequentially (wait, click, scroll, type, sleep, evaluate) with per-action error handling
-- [ ] 4.3 — Implement item extractor: query container selector, resolve field elements (self/next_sibling/parent context), extract attributes (text/href/src/custom)
-- [ ] 4.4 — Implement field transforms: `regex_int`, `regex_float`, `strip`, `strip_html`, `iso_date`, `absolute_url` — each as a pure function, with fallback to null on failure
-- [ ] 4.5 — Implement pagination detection: `page_param` (items found = has_next), `next_link` (selector exists = has_next), `offset_param`
-- [ ] 4.6 — Implement custom scraper integration: check if recipe has Scraper class, delegate to it for supported endpoints, fall back to declarative config otherwise
-- [ ] 4.7 — Assemble the `scrape()` function: acquire page → build URL → navigate → execute actions → extract items → transform → detect pagination → build unified response → release page
-- [ ] 4.8 — Write unit tests for transforms and URL builder
-- [ ] 4.9 — Write integration tests for scraping engine: use local HTTP server with HTML fixtures, test extraction, context resolution, optional fields, transforms, actions
+- [x] 4.1 — Implement URL template builder: substitute `{page}`, `{page_zero}`, `{query}` with proper URL encoding, handle page number mapping per recipe's pagination start value
+- [x] 4.2 — Implement action executor: process action list sequentially (wait, click, scroll, type, sleep, evaluate) with per-action error handling
+- [x] 4.3 — Implement item extractor: query container selector, resolve field elements (self/next_sibling/parent context), extract attributes (text/href/src/custom)
+- [x] 4.4 — Implement field transforms: `regex_int`, `regex_float`, `strip`, `strip_html`, `iso_date`, `absolute_url` — each as a pure function, with fallback to null on failure
+- [x] 4.5 — Implement pagination detection: `page_param` (items found = has_next), `next_link` (selector exists = has_next), `offset_param`
+- [x] 4.6 — Implement custom scraper integration: check if recipe has Scraper class, delegate to it for supported endpoints, fall back to declarative config otherwise
+- [x] 4.7 — Assemble the `scrape()` function: acquire page → build URL → navigate → execute actions → extract items → transform → detect pagination → build unified response → release page
+- [x] 4.8 — Write unit tests for transforms and URL builder
+- [x] 4.9 — Write integration tests for scraping engine: use local HTTP server with HTML fixtures, test extraction, context resolution, optional fields, transforms, actions
 
 ## Phase 5: API Routes & Index Page
 
