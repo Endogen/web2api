@@ -86,3 +86,4 @@ web2api/
 - 2026-02-18: Current backpressure baseline is fast in this repo state (`pytest tests/unit tests/integration --timeout=30 -x -q` completed with `30 passed, 1 skipped` in under a second).
 - 2026-02-18: Docker task 7.1 added a root `Dockerfile` using `python:3.12-slim`, installing the app via `pip install .` and Playwright Chromium via `playwright install --with-deps chromium`.
 - 2026-02-18: Docker task 7.2 added `docker-compose.yml` with a `web2api` service, runtime env defaults, and a `/health` curl healthcheck.
+- 2026-02-18: E2E coverage lives in `tests/e2e/test_e2e.py`; it runs `docker compose up --build -d`, validates Hacker News read/search and `/api/sites`, and auto-skips when Docker or live network access is unavailable.
