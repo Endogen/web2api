@@ -78,12 +78,17 @@ def _create_recipe_handler(recipe: Recipe, endpoint_name: str) -> RouteEndpoint:
         page: int = Query(default=1, ge=1),
         q: str | None = Query(default=None),
     ) -> JSONResponse:
+        # Pass any extra query params (beyond page/q) to the scraper
+        extra_params = {
+            k: v for k, v in request.query_params.items() if k not in {"page", "q"}
+        }
         response = await scrape(
             pool=request.app.state.pool,
             recipe=recipe,
             endpoint=endpoint_name,
             page=page,
             query=q,
+            extra_params=extra_params or None,
             scrape_timeout=request.app.state.scrape_timeout,
         )
         return JSONResponse(

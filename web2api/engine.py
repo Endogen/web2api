@@ -195,6 +195,7 @@ async def scrape(
     endpoint: str,
     page: int = 1,
     query: str | None = None,
+    extra_params: dict[str, str] | None = None,
     scrape_timeout: float = 30.0,
 ) -> ApiResponse:
     """Run a scrape and return a unified API response."""
@@ -244,6 +245,7 @@ async def scrape(
                 page=browser_page,
                 current_page=current_page,
                 query=query,
+                extra_params=extra_params,
             )
             if custom_result is not None:
                 used_custom_scraper = True
@@ -386,6 +388,7 @@ async def _run_custom_scraper(
     page: Page,
     current_page: int,
     query: str | None,
+    extra_params: dict[str, str] | None = None,
 ) -> ScrapeResult | None:
     """Invoke a recipe's custom scraper if one is registered.
 
@@ -401,7 +404,9 @@ async def _run_custom_scraper(
     if not recipe.scraper.supports(endpoint):
         return None
 
-    params = {"page": current_page, "query": query}
+    params: dict[str, Any] = {"page": current_page, "query": query}
+    if extra_params:
+        params.update(extra_params)
     return await recipe.scraper.scrape(endpoint, page, params)
 
 
