@@ -1,12 +1,12 @@
-name: "DeepL Translator (DE→EN)"
-slug: "deepl"
+name: "DeepL Translator (EN→DE)"
+slug: "deepl-en-de"
 base_url: "https://www.deepl.com"
-description: "Translate text from German to English using DeepL"
+description: "Translate text from English to German using DeepL"
 capabilities:
   - search
 endpoints:
   search:
-    url: "https://www.deepl.com/en/translator#de/en/"
+    url: "https://www.deepl.com/en/translator#en/de/"
     actions:
       - type: wait
         selector: "d-textarea"
