@@ -1,0 +1,22 @@
+services:
+  web2api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      POOL_MAX_CONTEXTS: "${POOL_MAX_CONTEXTS:-5}"
+      POOL_CONTEXT_TTL: "${POOL_CONTEXT_TTL:-50}"
+      POOL_ACQUIRE_TIMEOUT: "${POOL_ACQUIRE_TIMEOUT:-30}"
+      POOL_PAGE_TIMEOUT: "${POOL_PAGE_TIMEOUT:-15000}"
+      POOL_QUEUE_SIZE: "${POOL_QUEUE_SIZE:-20}"
+      SCRAPE_TIMEOUT: "${SCRAPE_TIMEOUT:-30}"
+      RECIPES_DIR: "${RECIPES_DIR:-./recipes}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
