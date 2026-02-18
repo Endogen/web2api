@@ -80,6 +80,7 @@ def _create_recipe_handler(recipe: Recipe, endpoint: Literal["read", "search"]) 
             endpoint=endpoint,
             page=page,
             query=q if endpoint == "search" else None,
+            scrape_timeout=request.app.state.scrape_timeout,
         )
         return JSONResponse(
             content=response.model_dump(mode="json"),
@@ -111,6 +112,7 @@ def create_app(
     recipes_dir: Path | None = None,
     pool: BrowserPool | None = None,
     registry: RecipeRegistry | None = None,
+    scrape_timeout: float | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application."""
     logging.getLogger("web2api").setLevel(logging.INFO)
@@ -120,6 +122,11 @@ def create_app(
         acquire_timeout=float(os.environ.get("POOL_ACQUIRE_TIMEOUT", "30.0")),
         page_timeout_ms=int(os.environ.get("POOL_PAGE_TIMEOUT", "15000")),
         queue_size=int(os.environ.get("POOL_QUEUE_SIZE", "20")),
+    )
+    effective_scrape_timeout = (
+        scrape_timeout
+        if scrape_timeout is not None
+        else float(os.environ.get("SCRAPE_TIMEOUT", "30"))
     )
     recipe_registry = registry or RecipeRegistry()
     effective_recipes_dir = recipes_dir
@@ -133,6 +140,7 @@ def create_app(
         await browser_pool.start()
         app.state.pool = browser_pool
         app.state.registry = recipe_registry
+        app.state.scrape_timeout = effective_scrape_timeout
         try:
             yield
         finally:

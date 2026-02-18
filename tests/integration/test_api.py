@@ -158,6 +158,7 @@ async def test_api_routes_and_index(
         endpoint: EndpointType,
         page: int = 1,
         query: str | None = None,
+        scrape_timeout: float = 30.0,
     ) -> ApiResponse:
         _ = pool
         if endpoint not in recipe.config.capabilities:

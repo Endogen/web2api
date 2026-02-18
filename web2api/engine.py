@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import UTC, datetime
@@ -194,6 +195,7 @@ async def scrape(
     endpoint: Literal["read", "search"],
     page: int = 1,
     query: str | None = None,
+    scrape_timeout: float = 30.0,
 ) -> ApiResponse:
     """Run a scrape and return a unified API response."""
     started_at = perf_counter()
@@ -245,7 +247,9 @@ async def scrape(
         )
 
     used_custom_scraper = False
-    try:
+
+    async def _do_scrape() -> ScrapeResult:
+        nonlocal used_custom_scraper
         async with pool.page() as browser_page:
             custom_result = await _run_custom_scraper(
                 recipe=recipe,
@@ -256,31 +260,34 @@ async def scrape(
             )
             if custom_result is not None:
                 used_custom_scraper = True
-                result = custom_result
-            else:
-                url = build_url(endpoint_config, page=current_page, query=query)
-                await browser_page.goto(url)
-                await execute_actions(browser_page, endpoint_config.actions)
-                raw_items = await extract_items(
-                    browser_page,
-                    endpoint_config.items,
-                    base_url=recipe.config.base_url,
-                )
-                has_next, has_prev, total_pages, total_items = await detect_pagination(
-                    browser_page,
-                    endpoint_config.pagination,
-                    current_page=current_page,
-                    item_count=len(raw_items),
-                )
-                result = ScrapeResult(
-                    items=raw_items,
-                    current_page=current_page,
-                    has_next=has_next,
-                    has_prev=has_prev,
-                    total_pages=total_pages,
-                    total_items=total_items,
-                )
-    except TimeoutError as exc:
+                return custom_result
+
+            url = build_url(endpoint_config, page=current_page, query=query)
+            await browser_page.goto(url)
+            await execute_actions(browser_page, endpoint_config.actions)
+            raw_items = await extract_items(
+                browser_page,
+                endpoint_config.items,
+                base_url=recipe.config.base_url,
+            )
+            has_next, has_prev, total_pages, total_items = await detect_pagination(
+                browser_page,
+                endpoint_config.pagination,
+                current_page=current_page,
+                item_count=len(raw_items),
+            )
+            return ScrapeResult(
+                items=raw_items,
+                current_page=current_page,
+                has_next=has_next,
+                has_prev=has_prev,
+                total_pages=total_pages,
+                total_items=total_items,
+            )
+
+    try:
+        result = await asyncio.wait_for(_do_scrape(), timeout=scrape_timeout)
+    except TimeoutError:
         return _error_response(
             recipe=recipe,
             endpoint=endpoint,
@@ -288,7 +295,7 @@ async def scrape(
             current_page=current_page,
             started_at=started_at,
             code="SCRAPE_TIMEOUT",
-            message=str(exc),
+            message=f"scrape exceeded {scrape_timeout}s timeout",
         )
     except Exception as exc:  # noqa: BLE001
         return _error_response(
