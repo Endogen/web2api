@@ -1,0 +1,23 @@
+name: "DeepL Translator"
+slug: "deepl"
+base_url: "https://www.deepl.com"
+description: "Translate text from German to English using DeepL"
+capabilities:
+  - search
+endpoints:
+  search:
+    url: "https://www.deepl.com/en/translator#de/en/"
+    actions:
+      - type: wait
+        selector: "d-textarea"
+        timeout: 10000
+    items:
+      container: "d-textarea"
+      fields:
+        text:
+          selector: ""
+          attribute: "text"
+    pagination:
+      type: "page_param"
+      param: "p"
+      start: 1
