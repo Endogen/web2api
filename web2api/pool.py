@@ -38,6 +38,7 @@ class BrowserPool:
         queue_size: int = 20,
         headless: bool = True,
     ) -> None:
+        """Configure browser pool limits, recycling behavior, and launch options."""
         self.max_contexts = max_contexts
         self.context_ttl = context_ttl
         self.acquire_timeout = acquire_timeout

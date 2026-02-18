@@ -31,6 +31,7 @@ class RecipeRegistry:
     """Registry of recipe plugins discovered from the filesystem."""
 
     def __init__(self) -> None:
+        """Initialize an empty in-memory recipe registry."""
         self._recipes: dict[str, Recipe] = {}
 
     def discover(self, recipes_dir: Path) -> None:

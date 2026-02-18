@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Literal
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
@@ -25,16 +25,18 @@ from web2api.pool import BrowserPool
 from web2api.registry import Recipe, RecipeRegistry
 from web2api.schemas import ErrorResponse
 
-RouteEndpoint = Callable[..., Any]
+RouteEndpoint = Callable[..., Awaitable[JSONResponse]]
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 logger = logging.getLogger(__name__)
 
 
 def _default_recipes_dir() -> Path:
+    """Return the default recipes directory path."""
     return Path(__file__).resolve().parent.parent / "recipes"
 
 
 def _status_code_for_error(error: ErrorResponse | None) -> int:
+    """Map unified API error payloads to HTTP status codes."""
     if error is None:
         return 200
     return {
@@ -48,6 +50,7 @@ def _status_code_for_error(error: ErrorResponse | None) -> int:
 
 
 def _site_payload(recipe: Recipe) -> dict[str, Any]:
+    """Build the site metadata payload returned by discovery endpoints."""
     config = recipe.config
     return {
         "name": config.name,
@@ -63,6 +66,8 @@ def _site_payload(recipe: Recipe) -> dict[str, Any]:
 
 
 def _create_recipe_handler(recipe: Recipe, endpoint: Literal["read", "search"]) -> RouteEndpoint:
+    """Create a route handler bound to a specific recipe endpoint."""
+
     async def handler(
         request: Request,
         page: int = Query(default=1, ge=1),
@@ -84,6 +89,7 @@ def _create_recipe_handler(recipe: Recipe, endpoint: Literal["read", "search"]) 
 
 
 def _register_recipe_routes(app: FastAPI, registry: RecipeRegistry) -> None:
+    """Register per-recipe read/search routes on the FastAPI app."""
     for recipe in registry.list_all():
         app.add_api_route(
             path=f"/{recipe.config.slug}/read",
@@ -129,7 +135,10 @@ def create_app(
     )
 
     @app.middleware("http")
-    async def request_logging_middleware(request: Request, call_next: Callable[..., Any]) -> Any:
+    async def request_logging_middleware(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
         request_id = build_request_id(request.headers.get(REQUEST_ID_HEADER))
         token = set_request_id(request_id)
         request.state.request_id = request_id
