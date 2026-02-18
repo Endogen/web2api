@@ -47,7 +47,7 @@ STATUS: PLANNING_COMPLETE
 
 ## Phase 6: Hacker News Reference Recipe
 
-- [ ] 6.1 — Create `recipes/hackernews/recipe.yaml`: metadata, read endpoint (front page stories with selectors for title, URL, score, author, comments, time, ID), search endpoint, pagination config
+- [x] 6.1 — Create `recipes/hackernews/recipe.yaml`: metadata, read endpoint (front page stories with selectors for title, URL, score, author, comments, time, ID), search endpoint, pagination config
 - [ ] 6.2 — Test the HN recipe manually against the real site (via integration test with live scraping) — adjust selectors as needed until extraction works reliably
 - [ ] 6.3 — Write `recipes/hackernews/README.md` documenting the recipe as a template for others
 

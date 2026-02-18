@@ -81,3 +81,4 @@ web2api/
 - 2026-02-18: This sandbox does not have `ruff`/`pytest` preinstalled and cannot reach PyPI, so backpressure commands require a pre-provisioned toolchain or offline package mirror.
 - 2026-02-18: `pytest-timeout` is unavailable in the pre-provisioned environment and network access is blocked, so `pytest ... --timeout=30` fails unless an offline wheel/mirror is provided.
 - 2026-02-18: Playwright Chromium launch fails in this sandbox (`sandbox_host_linux.cc` fatal), so real browser integration tests must use fakes/mocks here.
+- 2026-02-18: Backpressure commands succeeded in this environment (`ruff` available and `pytest ... --timeout=30` works inside `.venv`), indicating the toolchain is provisioned for local unit/integration runs.
