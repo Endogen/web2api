@@ -376,10 +376,7 @@ async def _resolve_context_root(container: ElementHandle, context: str) -> Eleme
     else:
         raise RuntimeError(f"unknown field context '{context}'")
 
-    try:
-        return handle.as_element()
-    finally:
-        await handle.dispose()
+    return handle.as_element()
 
 
 async def _get_attribute_value(element: ElementHandle, attribute: str) -> str | None:
