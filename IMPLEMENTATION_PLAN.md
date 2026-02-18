@@ -22,7 +22,7 @@ STATUS: PLANNING_COMPLETE
 - [x] 3.2 — Implement context recycling: track usage count per context, close/recreate after TTL, force-close corrupted contexts
 - [x] 3.3 — Implement health reporting: `pool.health` property returning connection status, context counts, queue size, total requests served
 - [x] 3.4 — Wire pool into FastAPI lifespan: start pool on startup, stop on shutdown
-- [ ] 3.5 — Write integration tests for pool: acquire/release works, concurrent requests respect limits, timeout on exhaustion, recycling, health stats
+- [x] 3.5 — Write integration tests for pool: acquire/release works, concurrent requests respect limits, timeout on exhaustion, recycling, health stats
 
 ## Phase 4: Scraping Engine
 
