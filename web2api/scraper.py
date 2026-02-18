@@ -25,11 +25,27 @@ class BaseScraper(ABC):
     """Base class for optional recipe-specific scraper implementations."""
 
     async def read(self, page: Page, params: dict[str, Any]) -> ScrapeResult:
-        """Scrape content for a read endpoint."""
+        """Scrape content for a read endpoint.
+
+        The ``page`` is a **blank** Playwright page — no URL has been loaded.
+        The scraper must navigate to the target URL itself (e.g. via
+        ``await page.goto(...)``).
+
+        ``params`` contains ``page`` (int, 1-based page number) and ``query``
+        (str | None).
+        """
         raise NotImplementedError("read is not implemented")
 
     async def search(self, page: Page, params: dict[str, Any]) -> ScrapeResult:
-        """Scrape content for a search endpoint."""
+        """Scrape content for a search endpoint.
+
+        The ``page`` is a **blank** Playwright page — no URL has been loaded.
+        The scraper must navigate to the target URL itself (e.g. via
+        ``await page.goto(...)``).
+
+        ``params`` contains ``page`` (int, 1-based page number) and ``query``
+        (str | None).
+        """
         raise NotImplementedError("search is not implemented")
 
     def supports_read(self) -> bool:

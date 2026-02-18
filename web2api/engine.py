@@ -400,6 +400,14 @@ async def _run_custom_scraper(
     current_page: int,
     query: str | None,
 ) -> ScrapeResult | None:
+    """Invoke a recipe's custom scraper if one is registered.
+
+    The ``page`` passed to the scraper is a **blank** Playwright page with no
+    URL loaded.  The custom scraper is responsible for navigating to the target
+    URL (e.g. via ``await page.goto(...)``).  If no custom scraper exists or
+    the scraper does not support the requested endpoint, ``None`` is returned
+    and the engine falls back to declarative YAML extraction.
+    """
     if recipe.scraper is None:
         return None
 

@@ -199,9 +199,15 @@ from web2api.scraper import BaseScraper, ScrapeResult
 
 class Scraper(BaseScraper):
     async def read(self, page: Page, params: dict) -> ScrapeResult:
-        # Custom scraping logic
-        return ScrapeResult(items=[], current_page=1, has_next=False, has_prev=False)
+        # The page is BLANK — you must navigate to the target URL yourself.
+        await page.goto(f"https://example.com/items?page={params['page']}")
+        # Custom scraping logic ...
+        return ScrapeResult(items=[], current_page=params["page"], has_next=False, has_prev=False)
 ```
+
+> **Note:** The `page` passed to `read()` and `search()` is a **blank** Playwright page — no URL
+> has been loaded. Your scraper is responsible for calling `await page.goto(...)` to navigate to the
+> target site before extracting data.
 
 If custom methods are not implemented, Web2API falls back to declarative YAML for that endpoint.
 
