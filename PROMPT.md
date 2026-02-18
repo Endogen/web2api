@@ -10,9 +10,9 @@ Build Web2API — a platform that turns any website into a REST API by scraping 
 - Read: AGENTS.md (test commands, project conventions, learnings, human decisions)
 
 ## Rules
-1. Pick the highest priority incomplete task from IMPLEMENTATION_PLAN.md
+1. Pick the **single** highest priority incomplete task from IMPLEMENTATION_PLAN.md
 2. Investigate the relevant code BEFORE making changes
-3. Implement the task completely
+3. Implement **only that one task** — do NOT continue to the next task
 4. Run the backpressure commands from AGENTS.md (lint, test)
 5. If tests pass:
    - Commit with a clear, conventional message (feat:, fix:, refactor:, etc.)
@@ -21,7 +21,7 @@ Build Web2API — a platform that turns any website into a REST API by scraping 
    - Attempt to fix (max 3 tries per task)
    - If still failing after 3 attempts, notify for help
 7. Update AGENTS.md with any operational learnings
-8. Move to next task
+8. **Stop.** The outer loop will invoke you again for the next task.
 
 ## Error Handling
 If you encounter issues:
