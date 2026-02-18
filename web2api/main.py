@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -113,9 +114,19 @@ def create_app(
 ) -> FastAPI:
     """Create and configure the FastAPI application."""
     logging.getLogger("web2api").setLevel(logging.INFO)
-    browser_pool = pool or BrowserPool()
+    browser_pool = pool or BrowserPool(
+        max_contexts=int(os.environ.get("POOL_MAX_CONTEXTS", "5")),
+        context_ttl=int(os.environ.get("POOL_CONTEXT_TTL", "50")),
+        acquire_timeout=float(os.environ.get("POOL_ACQUIRE_TIMEOUT", "30.0")),
+        page_timeout_ms=int(os.environ.get("POOL_PAGE_TIMEOUT", "15000")),
+        queue_size=int(os.environ.get("POOL_QUEUE_SIZE", "20")),
+    )
     recipe_registry = registry or RecipeRegistry()
-    recipe_registry.discover(recipes_dir or _default_recipes_dir())
+    effective_recipes_dir = recipes_dir
+    if effective_recipes_dir is None:
+        env_recipes = os.environ.get("RECIPES_DIR")
+        effective_recipes_dir = Path(env_recipes) if env_recipes else _default_recipes_dir()
+    recipe_registry.discover(effective_recipes_dir)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

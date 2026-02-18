@@ -108,6 +108,7 @@ load_config_file() {
   CONFIG_FLAGS=""
   CONFIG_MAX_ITERS=""
   CONFIG_TEST_CMD=""
+  CONFIG_MODEL=""
 
   if [[ ! -f "$CONFIG_FILE" ]]; then
     return
@@ -136,6 +137,7 @@ emit(payload.get("cli", ""))
 emit(payload.get("flags", ""))
 emit(payload.get("max_iterations", ""))
 emit(payload.get("test_command", ""))
+emit(payload.get("model", ""))
 PY
   ); then
     log "⚠️ Could not parse $CONFIG_FILE; continuing with defaults/environment"
@@ -146,6 +148,7 @@ PY
   CONFIG_FLAGS="${config_values[1]:-}"
   CONFIG_MAX_ITERS="${config_values[2]:-}"
   CONFIG_TEST_CMD="${config_values[3]:-}"
+  CONFIG_MODEL="${config_values[4]:-}"
 }
 
 snapshot_completed_tasks() {
@@ -160,7 +163,7 @@ import re
 import sys
 
 path = sys.argv[1]
-pattern = re.compile(r"^\s*-\s*\[[xX]\]\s*([0-9]+(?:\.[0-9]+)*)\s*:")
+pattern = re.compile(r"^\s*-\s*\[[xX]\]\s*([0-9]+(?:\.[0-9]+)*)\s*[\:\—\–\-]")
 
 with open(path, encoding="utf-8") as handle:
     for line in handle:
@@ -335,6 +338,10 @@ fi
 if [[ -n "$CONFIG_TEST_CMD" ]]; then
   TEST_CMD="$CONFIG_TEST_CMD"
 fi
+MODEL=""
+if [[ -n "$CONFIG_MODEL" ]]; then
+  MODEL="$CONFIG_MODEL"
+fi
 
 # Environment variables override config/defaults
 if [[ -n "${RALPH_CLI:-}" ]]; then
@@ -345,6 +352,9 @@ if [[ "${RALPH_FLAGS+x}" == "x" ]]; then
 fi
 if [[ "${RALPH_TEST+x}" == "x" ]]; then
   TEST_CMD="$RALPH_TEST"
+fi
+if [[ -n "${RALPH_MODEL:-}" ]]; then
+  MODEL="$RALPH_MODEL"
 fi
 
 # Positional max_iterations has highest priority
@@ -440,16 +450,33 @@ trap 'handle_signal SIGINT' INT
 # Clear any stale pending notification from previous run
 [[ -f "$NOTIFY_FILE" ]] && rm -f "$NOTIFY_FILE"
 
+# Resume iteration numbering from last JSONL entry
+ITER_OFFSET=0
+if [[ -f "$ITERATIONS_FILE" ]]; then
+  ITER_OFFSET=$(python3 -c "
+import json, sys
+last = 0
+for line in open('$ITERATIONS_FILE'):
+    line = line.strip()
+    if not line: continue
+    try:
+        last = max(last, json.loads(line).get('iteration', 0))
+    except: pass
+print(last)
+" 2>/dev/null || echo 0)
+fi
+
 echo -e "${BLUE}🐺 Ralph Loop starting${NC}"
 echo -e "   CLI: $CLI $CLI_FLAGS"
 echo -e "   Max iterations: $MAX_ITERS"
 echo -e "   Project: $(pwd)"
 [[ -n "$TEST_CMD" ]] && echo -e "   Test command: $TEST_CMD"
+[[ "$ITER_OFFSET" -gt 0 ]] && echo -e "   Resuming from iteration: $((ITER_OFFSET + 1))"
 echo ""
 
 # Main loop
 for i in $(seq 1 "$MAX_ITERS"); do
-  CURRENT_ITER=$i
+  CURRENT_ITER=$((ITER_OFFSET + i))
   export CURRENT_ITER
 
   process_injection_file
@@ -464,14 +491,21 @@ for i in $(seq 1 "$MAX_ITERS"); do
 
   HEAD_BEFORE="$(git rev-parse --short=7 HEAD 2>/dev/null || true)"
 
-  log "${BLUE}=== Iteration $i/$MAX_ITERS ===${NC}"
+  log "${BLUE}=== Iteration $CURRENT_ITER (loop $i/$MAX_ITERS) ===${NC}"
+
+  CLAUDE_JSON_MODE=false
+  MODEL_FLAG=""
+  if [[ -n "$MODEL" ]]; then
+    MODEL_FLAG="--model $MODEL"
+  fi
 
   case "$CLI" in
     codex)
-      CMD="codex exec $CLI_FLAGS"
+      CMD="codex exec $CLI_FLAGS $MODEL_FLAG"
       ;;
     claude)
-      CMD="claude --print $CLI_FLAGS"
+      CMD="claude --print --output-format json $CLI_FLAGS $MODEL_FLAG"
+      CLAUDE_JSON_MODE=true
       ;;
     opencode)
       CMD="opencode run"
@@ -494,11 +528,46 @@ for i in $(seq 1 "$MAX_ITERS"); do
     AGENT_EXIT_CODE=$?
   fi
 
+  # For Claude JSON mode: extract result text and token usage from JSON response
+  CLAUDE_TOKENS=""
+  if [[ "$CLAUDE_JSON_MODE" == "true" && -n "$AGENT_OUTPUT" ]]; then
+    CLAUDE_RESULT="$(printf '%s' "$AGENT_OUTPUT" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(data.get('result', ''))
+except: print('')
+" 2>/dev/null || true)"
+    CLAUDE_TOKENS="$(printf '%s' "$AGENT_OUTPUT" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    usage = data.get('usage', {})
+    total = (usage.get('input_tokens', 0) + usage.get('cache_creation_input_tokens', 0)
+             + usage.get('cache_read_input_tokens', 0) + usage.get('output_tokens', 0))
+    print(f'{total / 1000:.3f}')
+except: pass
+" 2>/dev/null || true)"
+    # Replace AGENT_OUTPUT with just the result text for logging
+    if [[ -n "$CLAUDE_RESULT" ]]; then
+      AGENT_OUTPUT="$CLAUDE_RESULT"
+    fi
+  fi
+
   if [[ -n "$AGENT_OUTPUT" ]]; then
     printf '%s\n' "$AGENT_OUTPUT" | tee -a "$LOG_FILE"
   fi
 
+  # Append token info to log so the dashboard log parser can find it
+  if [[ -n "$CLAUDE_TOKENS" ]]; then
+    printf 'tokens used\n%s\n' "$CLAUDE_TOKENS" | tee -a "$LOG_FILE"
+  fi
+
   TOKENS="$(extract_token_count "$AGENT_OUTPUT" || true)"
+  # Use Claude JSON tokens if text extraction found nothing
+  if [[ -z "$TOKENS" && -n "$CLAUDE_TOKENS" ]]; then
+    TOKENS="$CLAUDE_TOKENS"
+  fi
 
   TEST_PASSED="null"
   TEST_OUTPUT=""
@@ -507,7 +576,7 @@ for i in $(seq 1 "$MAX_ITERS"); do
   if ((AGENT_EXIT_CODE != 0)); then
     ITER_ERRORS+=("Agent exited with code $AGENT_EXIT_CODE")
     log "${YELLOW}⚠️ Agent exited with code $AGENT_EXIT_CODE${NC}"
-    notify "ERROR" "Agent crashed on iteration $i/$MAX_ITERS" "Exit code: $AGENT_EXIT_CODE. Check log for details."
+    notify "ERROR" "Agent crashed on iteration $CURRENT_ITER" "Exit code: $AGENT_EXIT_CODE. Check log for details."
   fi
 
   if [[ -n "$TEST_CMD" ]]; then
@@ -555,7 +624,7 @@ for i in $(seq 1 "$MAX_ITERS"); do
   ERRORS_JSON="$(json_array_from_values "${ITER_ERRORS[@]:-}")"
 
   append_iteration_record \
-    "$i" \
+    "$CURRENT_ITER" \
     "$MAX_ITERS" \
     "$ITER_START" \
     "$ITER_END" \
