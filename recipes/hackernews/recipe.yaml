@@ -2,11 +2,9 @@ name: "Hacker News"
 slug: "hackernews"
 base_url: "https://news.ycombinator.com"
 description: "Hacker News front page stories and search results"
-capabilities:
-  - read
-  - search
 endpoints:
   read:
+    description: "Front page stories"
     url: "https://news.ycombinator.com/news?p={page}"
     actions:
       - type: wait
@@ -53,6 +51,8 @@ endpoints:
       start: 1
 
   search:
+    description: "Search stories via Algolia"
+    requires_query: true
     url: "https://hn.algolia.com/?q={query}&page={page_zero}"
     actions:
       - type: wait

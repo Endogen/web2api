@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -53,20 +53,24 @@ def _status_code_for_error(error: ErrorResponse | None) -> int:
 def _site_payload(recipe: Recipe) -> dict[str, Any]:
     """Build the site metadata payload returned by discovery endpoints."""
     config = recipe.config
+    endpoints_info: list[dict[str, Any]] = []
+    for name, ep_config in config.endpoints.items():
+        endpoints_info.append({
+            "name": name,
+            "description": ep_config.description,
+            "requires_query": ep_config.requires_query,
+            "link": f"/{config.slug}/{name}",
+        })
     return {
         "name": config.name,
         "slug": config.slug,
         "description": config.description,
         "base_url": config.base_url,
-        "capabilities": config.capabilities,
-        "links": {
-            "read": f"/{config.slug}/read" if "read" in config.capabilities else None,
-            "search": f"/{config.slug}/search" if "search" in config.capabilities else None,
-        },
+        "endpoints": endpoints_info,
     }
 
 
-def _create_recipe_handler(recipe: Recipe, endpoint: Literal["read", "search"]) -> RouteEndpoint:
+def _create_recipe_handler(recipe: Recipe, endpoint_name: str) -> RouteEndpoint:
     """Create a route handler bound to a specific recipe endpoint."""
 
     async def handler(
@@ -77,9 +81,9 @@ def _create_recipe_handler(recipe: Recipe, endpoint: Literal["read", "search"]) 
         response = await scrape(
             pool=request.app.state.pool,
             recipe=recipe,
-            endpoint=endpoint,
+            endpoint=endpoint_name,
             page=page,
-            query=q if endpoint == "search" else None,
+            query=q,
             scrape_timeout=request.app.state.scrape_timeout,
         )
         return JSONResponse(
@@ -91,20 +95,15 @@ def _create_recipe_handler(recipe: Recipe, endpoint: Literal["read", "search"]) 
 
 
 def _register_recipe_routes(app: FastAPI, registry: RecipeRegistry) -> None:
-    """Register per-recipe read/search routes on the FastAPI app."""
+    """Register per-recipe endpoint routes on the FastAPI app."""
     for recipe in registry.list_all():
-        app.add_api_route(
-            path=f"/{recipe.config.slug}/read",
-            endpoint=_create_recipe_handler(recipe, "read"),
-            methods=["GET"],
-            name=f"{recipe.config.slug}_read",
-        )
-        app.add_api_route(
-            path=f"/{recipe.config.slug}/search",
-            endpoint=_create_recipe_handler(recipe, "search"),
-            methods=["GET"],
-            name=f"{recipe.config.slug}_search",
-        )
+        for endpoint_name in recipe.config.endpoints:
+            app.add_api_route(
+                path=f"/{recipe.config.slug}/{endpoint_name}",
+                endpoint=_create_recipe_handler(recipe, endpoint_name),
+                methods=["GET"],
+                name=f"{recipe.config.slug}_{endpoint_name}",
+            )
 
 
 def create_app(
@@ -149,7 +148,7 @@ def create_app(
     app = FastAPI(
         title="Web2API",
         summary="Turn websites into REST APIs by scraping them live with Playwright.",
-        version="0.1.0",
+        version="0.2.0",
         lifespan=lifespan,
     )
 

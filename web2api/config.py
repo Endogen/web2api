@@ -7,7 +7,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-Capability = Literal["read", "search"]
 ActionType = Literal["wait", "click", "scroll", "type", "sleep", "evaluate"]
 PaginationType = Literal["page_param", "next_link", "offset_param"]
 FieldContext = Literal["self", "next_sibling", "parent"]
@@ -108,27 +107,11 @@ class EndpointConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     url: str
+    description: str | None = None
+    requires_query: bool = False
     actions: list[ActionConfig] = Field(default_factory=list)
     items: ItemsConfig
     pagination: PaginationConfig
-
-
-class EndpointsConfig(BaseModel):
-    """Container for read/search endpoint definitions."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    read: EndpointConfig | None = None
-    search: EndpointConfig | None = None
-
-    def defined_capabilities(self) -> set[Capability]:
-        """Return capabilities that have endpoint definitions."""
-        capabilities: set[Capability] = set()
-        if self.read is not None:
-            capabilities.add("read")
-        if self.search is not None:
-            capabilities.add("search")
-        return capabilities
 
 
 class RecipeConfig(BaseModel):
@@ -140,25 +123,27 @@ class RecipeConfig(BaseModel):
     slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     base_url: str
     description: str
-    capabilities: list[Capability] = Field(min_length=1)
-    endpoints: EndpointsConfig
+    endpoints: dict[str, EndpointConfig]
 
     @model_validator(mode="after")
-    def validate_capability_endpoint_consistency(self) -> RecipeConfig:
-        """Ensure capability declarations and endpoint definitions match."""
-        declared = set(self.capabilities)
-        defined = self.endpoints.defined_capabilities()
-        if len(declared) != len(self.capabilities):
-            raise ValueError("capabilities must not contain duplicates")
-        missing = declared - defined
-        if missing:
-            missing_list = ", ".join(sorted(missing))
-            raise ValueError(f"missing endpoint definition(s) for capability: {missing_list}")
-        extra = defined - declared
-        if extra:
-            extra_list = ", ".join(sorted(extra))
-            raise ValueError(f"endpoint definition(s) without matching capability: {extra_list}")
+    def validate_endpoints(self) -> RecipeConfig:
+        """Ensure at least one endpoint is defined and names are valid."""
+        if not self.endpoints:
+            raise ValueError("at least one endpoint must be defined")
+        import re
+
+        name_pattern = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+        for name in self.endpoints:
+            if not name_pattern.match(name):
+                raise ValueError(
+                    f"endpoint name '{name}' must match pattern [a-z0-9][a-z0-9_-]*"
+                )
         return self
+
+    @property
+    def endpoint_names(self) -> list[str]:
+        """Return sorted list of endpoint names."""
+        return sorted(self.endpoints.keys())
 
     def assert_slug_matches_folder(self, folder_name: str) -> None:
         """Raise if the recipe slug does not match the folder name."""

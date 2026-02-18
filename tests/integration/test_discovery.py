@@ -34,7 +34,6 @@ def _write_recipe(recipe_dir: Path, *, slug: str | None = None) -> None:
         "slug": recipe_slug,
         "base_url": "https://example.com",
         "description": "Fixture recipe for discovery tests.",
-        "capabilities": ["read"],
         "endpoints": {
             "read": _read_endpoint("https://example.com/items?page={page}"),
         },
@@ -118,7 +117,10 @@ def test_discovery_loads_custom_scraper(tmp_path: Path) -> None:
                 "from web2api.scraper import BaseScraper, ScrapeResult",
                 "",
                 "class Scraper(BaseScraper):",
-                "    async def read(self, page, params):",
+                "    def supports(self, endpoint):",
+                '        return endpoint == "read"',
+                "",
+                "    async def scrape(self, endpoint, page, params):",
                 "        return ScrapeResult()",
             ]
         ),
@@ -131,5 +133,5 @@ def test_discovery_loads_custom_scraper(tmp_path: Path) -> None:
     recipe = registry.get("custom")
     assert recipe is not None
     assert recipe.scraper is not None
-    assert recipe.scraper.supports_read() is True
-    assert recipe.scraper.supports_search() is False
+    assert recipe.scraper.supports("read") is True
+    assert recipe.scraper.supports("search") is False

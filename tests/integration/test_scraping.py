@@ -109,15 +109,14 @@ class FakePool:
         yield self._page
 
 
-def _build_recipe(endpoint: dict[str, Any]) -> Recipe:
+def _build_recipe(endpoints: dict[str, Any]) -> Recipe:
     config = RecipeConfig.model_validate(
         {
             "name": "Example",
             "slug": "example",
             "base_url": "https://example.com",
             "description": "Fixture recipe",
-            "capabilities": ["read"],
-            "endpoints": {"read": endpoint},
+            "endpoints": endpoints,
         }
     )
     return Recipe(config=config, scraper=None, path=Path("recipes/example"))
@@ -165,7 +164,7 @@ async def test_scrape_extracts_items_with_context_and_transforms() -> None:
         },
         "pagination": {"type": "next_link", "selector": ".next"},
     }
-    recipe = _build_recipe(endpoint)
+    recipe = _build_recipe({"read": endpoint})
 
     page = FakePage()
     page.selector_all_map[".item"] = [
@@ -214,7 +213,7 @@ async def test_scrape_handles_optional_fields() -> None:
         },
         "pagination": {"type": "page_param", "param": "page"},
     }
-    recipe = _build_recipe(endpoint)
+    recipe = _build_recipe({"read": endpoint})
 
     page = FakePage()
     page.selector_all_map[".item"] = [
@@ -247,7 +246,7 @@ async def test_scrape_executes_actions() -> None:
         "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
         "pagination": {"type": "page_param", "param": "page"},
     }
-    recipe = _build_recipe(endpoint)
+    recipe = _build_recipe({"read": endpoint})
     page = FakePage()
 
     response = await scrape(pool=FakePool(page), recipe=recipe, endpoint="read", page=1)
@@ -272,7 +271,7 @@ async def test_scrape_returns_error_when_action_fails() -> None:
         "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
         "pagination": {"type": "page_param", "param": "page"},
     }
-    recipe = _build_recipe(endpoint)
+    recipe = _build_recipe({"read": endpoint})
     page = FakePage()
     page.fail_wait_selector = True
 
@@ -280,3 +279,36 @@ async def test_scrape_returns_error_when_action_fails() -> None:
 
     assert response.error is not None
     assert response.error.code == "SCRAPE_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_scrape_returns_error_for_unknown_endpoint() -> None:
+    endpoint = {
+        "url": "https://example.com/list?page={page}",
+        "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
+        "pagination": {"type": "page_param", "param": "page"},
+    }
+    recipe = _build_recipe({"read": endpoint})
+    page = FakePage()
+
+    response = await scrape(pool=FakePool(page), recipe=recipe, endpoint="nonexistent", page=1)
+
+    assert response.error is not None
+    assert response.error.code == "CAPABILITY_NOT_SUPPORTED"
+
+
+@pytest.mark.asyncio
+async def test_scrape_requires_query_validation() -> None:
+    endpoint = {
+        "url": "https://example.com/search?q={query}&page={page}",
+        "requires_query": True,
+        "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
+        "pagination": {"type": "page_param", "param": "page"},
+    }
+    recipe = _build_recipe({"search": endpoint})
+    page = FakePage()
+
+    response = await scrape(pool=FakePool(page), recipe=recipe, endpoint="search", page=1)
+
+    assert response.error is not None
+    assert response.error.code == "INVALID_PARAMS"

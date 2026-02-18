@@ -7,7 +7,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-EndpointType = Literal["read", "search"]
 ErrorCode = Literal[
     "SITE_NOT_FOUND",
     "CAPABILITY_NOT_SUPPORTED",
@@ -73,12 +72,12 @@ class ErrorResponse(BaseModel):
 
 
 class ApiResponse(BaseModel):
-    """Top-level response returned by read/search endpoints."""
+    """Top-level response returned by recipe endpoints."""
 
     model_config = ConfigDict(extra="forbid")
 
     site: SiteInfo
-    endpoint: EndpointType
+    endpoint: str
     query: str | None = None
     items: list[ItemResponse] = Field(default_factory=list)
     pagination: PaginationResponse

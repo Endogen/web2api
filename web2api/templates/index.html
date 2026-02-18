@@ -37,14 +37,30 @@
         background: #f0f4f8;
       }
 
-      .capability {
+      .endpoint {
         display: inline-block;
         margin-right: 0.5rem;
+        margin-bottom: 0.25rem;
         padding: 0.15rem 0.5rem;
         border-radius: 999px;
         background: #e4f7ec;
         color: #127947;
         font-size: 0.85rem;
+      }
+
+      .endpoint-link {
+        text-decoration: none;
+        color: inherit;
+      }
+
+      .endpoint-link:hover {
+        text-decoration: underline;
+      }
+
+      .endpoint-desc {
+        color: #52606d;
+        font-size: 0.8rem;
+        margin-left: 0.25rem;
       }
     </style>
   </head>
@@ -57,7 +73,7 @@
         <tr>
           <th>Site</th>
           <th>Description</th>
-          <th>Capabilities</th>
+          <th>Endpoints</th>
           <th>Try It</th>
         </tr>
       </thead>
@@ -70,18 +86,19 @@
           </td>
           <td>{{ site.description }}</td>
           <td>
-            {% for capability in site.capabilities %}
-            <span class="capability">{{ capability }}</span>
+            {% for ep in site.endpoints %}
+            <span class="endpoint">{{ ep.name }}{% if ep.requires_query %} (q){% endif %}</span>
             {% endfor %}
           </td>
           <td>
-            {% if site.links.read %}
-            <a href="{{ site.links.read }}">read</a>
+            {% for ep in site.endpoints %}
+            {% if ep.requires_query %}
+            <a href="{{ ep.link }}?q=example">{{ ep.name }}</a>
+            {% else %}
+            <a href="{{ ep.link }}">{{ ep.name }}</a>
             {% endif %}
-            {% if site.links.search %}
-            {% if site.links.read %} | {% endif %}
-            <a href="{{ site.links.search }}?q=example">search</a>
-            {% endif %}
+            {% if not loop.last %} | {% endif %}
+            {% endfor %}
           </td>
         </tr>
         {% endfor %}

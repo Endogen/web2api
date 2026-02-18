@@ -7,7 +7,7 @@ import logging
 import re
 from datetime import UTC, datetime
 from time import perf_counter
-from typing import Any, Literal
+from typing import Any
 from urllib.parse import quote_plus, urljoin
 
 from playwright.async_api import ElementHandle, Page
@@ -192,7 +192,7 @@ async def scrape(
     *,
     pool: BrowserPool,
     recipe: Recipe,
-    endpoint: Literal["read", "search"],
+    endpoint: str,
     page: int = 1,
     query: str | None = None,
     scrape_timeout: float = 30.0,
@@ -210,31 +210,7 @@ async def scrape(
         has_query=bool(query),
     )
 
-    if endpoint not in recipe.config.capabilities:
-        return _error_response(
-            recipe=recipe,
-            endpoint=endpoint,
-            query=query,
-            current_page=current_page,
-            started_at=started_at,
-            code="CAPABILITY_NOT_SUPPORTED",
-            message=f"endpoint '{endpoint}' is not supported by recipe '{recipe.config.slug}'",
-        )
-    if endpoint == "search" and not query:
-        return _error_response(
-            recipe=recipe,
-            endpoint=endpoint,
-            query=query,
-            current_page=current_page,
-            started_at=started_at,
-            code="INVALID_PARAMS",
-            message="missing required query parameter 'q' for search endpoint",
-        )
-
-    if endpoint == "read":
-        endpoint_config = recipe.config.endpoints.read
-    else:
-        endpoint_config = recipe.config.endpoints.search
+    endpoint_config = recipe.config.endpoints.get(endpoint)
     if endpoint_config is None:
         return _error_response(
             recipe=recipe,
@@ -243,7 +219,18 @@ async def scrape(
             current_page=current_page,
             started_at=started_at,
             code="CAPABILITY_NOT_SUPPORTED",
-            message=f"missing endpoint configuration for '{endpoint}'",
+            message=f"endpoint '{endpoint}' is not defined for recipe '{recipe.config.slug}'",
+        )
+
+    if endpoint_config.requires_query and not query:
+        return _error_response(
+            recipe=recipe,
+            endpoint=endpoint,
+            query=query,
+            current_page=current_page,
+            started_at=started_at,
+            code="INVALID_PARAMS",
+            message=f"missing required query parameter 'q' for endpoint '{endpoint}'",
         )
 
     used_custom_scraper = False
@@ -328,7 +315,7 @@ async def scrape(
             url=recipe.config.base_url,
         ),
         endpoint=endpoint,
-        query=query if endpoint == "search" else None,
+        query=query if endpoint_config.requires_query else None,
         items=items,
         pagination=PaginationResponse(
             current_page=result.current_page,
@@ -395,7 +382,7 @@ async def _get_attribute_value(element: ElementHandle, attribute: str) -> str | 
 async def _run_custom_scraper(
     *,
     recipe: Recipe,
-    endpoint: Literal["read", "search"],
+    endpoint: str,
     page: Page,
     current_page: int,
     query: str | None,
@@ -404,19 +391,18 @@ async def _run_custom_scraper(
 
     The ``page`` passed to the scraper is a **blank** Playwright page with no
     URL loaded.  The custom scraper is responsible for navigating to the target
-    URL (e.g. via ``await page.goto(...)``).  If no custom scraper exists or
-    the scraper does not support the requested endpoint, ``None`` is returned
-    and the engine falls back to declarative YAML extraction.
+    URL.  If no custom scraper exists or the scraper does not support the
+    requested endpoint, ``None`` is returned and the engine falls back to
+    declarative YAML extraction.
     """
     if recipe.scraper is None:
         return None
 
+    if not recipe.scraper.supports(endpoint):
+        return None
+
     params = {"page": current_page, "query": query}
-    if endpoint == "read" and recipe.scraper.supports_read():
-        return await recipe.scraper.read(page, params)
-    if endpoint == "search" and recipe.scraper.supports_search():
-        return await recipe.scraper.search(page, params)
-    return None
+    return await recipe.scraper.scrape(endpoint, page, params)
 
 
 def _normalize_items(raw_items: list[dict[str, Any]]) -> list[ItemResponse]:
@@ -453,7 +439,7 @@ def _to_iso_date(value: str) -> str | None:
 def _error_response(
     *,
     recipe: Recipe,
-    endpoint: Literal["read", "search"],
+    endpoint: str,
     query: str | None,
     current_page: int,
     started_at: float,
@@ -480,7 +466,7 @@ def _error_response(
             url=recipe.config.base_url,
         ),
         endpoint=endpoint,
-        query=query if endpoint == "search" else None,
+        query=query,
         items=[],
         pagination=PaginationResponse(
             current_page=current_page,

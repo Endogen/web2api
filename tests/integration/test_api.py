@@ -13,7 +13,6 @@ from httpx import ASGITransport, AsyncClient
 from web2api.main import create_app
 from web2api.schemas import (
     ApiResponse,
-    EndpointType,
     ErrorCode,
     ErrorResponse,
     MetadataResponse,
@@ -46,19 +45,18 @@ class FakePool:
         }
 
 
-def _write_recipe(recipes_dir: Path, slug: str, capabilities: list[str]) -> None:
-    endpoints: dict[str, object] = {
-        "read": {
-            "url": "https://example.com/items?page={page}",
-            "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
-            "pagination": {"type": "page_param", "param": "page"},
-        }
-    }
-    if "search" in capabilities:
-        endpoints["search"] = {
-            "url": "https://example.com/search?q={query}&page={page}",
-            "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
-            "pagination": {"type": "page_param", "param": "page"},
+def _write_recipe(
+    recipes_dir: Path,
+    slug: str,
+    endpoints: dict[str, dict] | None = None,
+) -> None:
+    if endpoints is None:
+        endpoints = {
+            "read": {
+                "url": "https://example.com/items?page={page}",
+                "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
+                "pagination": {"type": "page_param", "param": "page"},
+            },
         }
 
     recipe_dir = recipes_dir / slug
@@ -70,7 +68,6 @@ def _write_recipe(recipes_dir: Path, slug: str, capabilities: list[str]) -> None
                 "slug": slug,
                 "base_url": "https://example.com",
                 "description": f"{slug} fixture recipe",
-                "capabilities": capabilities,
                 "endpoints": endpoints,
             }
         ),
@@ -81,14 +78,14 @@ def _write_recipe(recipes_dir: Path, slug: str, capabilities: list[str]) -> None
 def _success_response(
     *,
     slug: str,
-    endpoint: EndpointType,
+    endpoint: str,
     page: int,
     query: str | None = None,
 ) -> ApiResponse:
     return ApiResponse(
         site=SiteInfo(name=slug.title(), slug=slug, url="https://example.com"),
         endpoint=endpoint,
-        query=query if endpoint == "search" else None,
+        query=query,
         items=[],
         pagination=PaginationResponse(
             current_page=page,
@@ -110,7 +107,7 @@ def _success_response(
 def _error_response(
     *,
     slug: str,
-    endpoint: EndpointType,
+    endpoint: str,
     page: int,
     code: ErrorCode,
     message: str,
@@ -148,20 +145,34 @@ async def test_api_routes_and_index(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     recipes_dir = tmp_path / "recipes"
-    _write_recipe(recipes_dir, "alpha", ["read", "search"])
-    _write_recipe(recipes_dir, "beta", ["read"])
+
+    _write_recipe(recipes_dir, "alpha", endpoints={
+        "read": {
+            "url": "https://example.com/items?page={page}",
+            "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
+            "pagination": {"type": "page_param", "param": "page"},
+        },
+        "search": {
+            "url": "https://example.com/search?q={query}&page={page}",
+            "requires_query": True,
+            "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
+            "pagination": {"type": "page_param", "param": "page"},
+        },
+    })
+    _write_recipe(recipes_dir, "beta")  # read only
 
     async def fake_scrape(
         *,
         pool: FakePool,
         recipe,
-        endpoint: EndpointType,
+        endpoint: str,
         page: int = 1,
         query: str | None = None,
         scrape_timeout: float = 30.0,
     ) -> ApiResponse:
         _ = pool
-        if endpoint not in recipe.config.capabilities:
+        ep_config = recipe.config.endpoints.get(endpoint)
+        if ep_config is None:
             return _error_response(
                 slug=recipe.config.slug,
                 endpoint=endpoint,
@@ -169,7 +180,7 @@ async def test_api_routes_and_index(
                 code="CAPABILITY_NOT_SUPPORTED",
                 message="unsupported endpoint",
             )
-        if endpoint == "search" and not query:
+        if ep_config.requires_query and not query:
             return _error_response(
                 slug=recipe.config.slug,
                 endpoint=endpoint,
@@ -193,6 +204,7 @@ async def test_api_routes_and_index(
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:
             with caplog.at_level(logging.INFO):
+                # Read endpoint
                 read_resp = await client.get(
                     "/alpha/read?page=2",
                     headers={"x-request-id": "req-alpha-read"},
@@ -202,33 +214,43 @@ async def test_api_routes_and_index(
                 assert read_resp.json()["pagination"]["current_page"] == 2
                 assert read_resp.headers["x-request-id"] == "req-alpha-read"
 
+                # Search endpoint
                 search_resp = await client.get("/alpha/search?q=test&page=1")
                 assert search_resp.status_code == 200
                 assert search_resp.json()["endpoint"] == "search"
                 assert search_resp.json()["query"] == "test"
                 assert search_resp.headers["x-request-id"] != ""
 
-                unsupported_resp = await client.get("/beta/search?q=test")
-                assert unsupported_resp.status_code == 400
-                assert unsupported_resp.json()["error"]["code"] == "CAPABILITY_NOT_SUPPORTED"
-
+                # Missing query on requires_query endpoint
                 invalid_query_resp = await client.get("/alpha/search")
                 assert invalid_query_resp.status_code == 400
                 assert invalid_query_resp.json()["error"]["code"] == "INVALID_PARAMS"
 
+                # Non-existent endpoint on a recipe (404 from FastAPI)
+                unknown_ep_resp = await client.get("/beta/search")
+                assert unknown_ep_resp.status_code == 404
+
+                # Non-existent recipe (404 from FastAPI)
                 unknown_resp = await client.get("/unknown/read")
                 assert unknown_resp.status_code == 404
 
+                # Sites listing
                 sites_resp = await client.get("/api/sites")
                 assert sites_resp.status_code == 200
                 slugs = {site["slug"] for site in sites_resp.json()}
                 assert slugs == {"alpha", "beta"}
+                # Check endpoints structure in response
+                alpha_site = next(s for s in sites_resp.json() if s["slug"] == "alpha")
+                ep_names = {ep["name"] for ep in alpha_site["endpoints"]}
+                assert ep_names == {"read", "search"}
 
+                # Health check
                 health_resp = await client.get("/health")
                 assert health_resp.status_code == 200
                 assert health_resp.json()["status"] == "ok"
                 assert health_resp.json()["recipes"] == 2
 
+                # Index page
                 index_resp = await client.get("/")
                 assert index_resp.status_code == 200
                 assert "alpha" in index_resp.text
@@ -240,12 +262,6 @@ async def test_api_routes_and_index(
         and getattr(record, "path", None) == "/alpha/read"
         and getattr(record, "request_id", None) == "req-alpha-read"
         and isinstance(getattr(record, "response_time_ms", None), int)
-        for record in caplog.records
-    )
-    assert any(
-        getattr(record, "event", None) == "request.completed"
-        and getattr(record, "path", None) == "/beta/search"
-        and getattr(record, "status_code", None) == 400
         for record in caplog.records
     )
 
