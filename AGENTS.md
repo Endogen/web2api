@@ -87,3 +87,4 @@ web2api/
 - 2026-02-18: Docker task 7.1 added a root `Dockerfile` using `python:3.12-slim`, installing the app via `pip install .` and Playwright Chromium via `playwright install --with-deps chromium`.
 - 2026-02-18: Docker task 7.2 added `docker-compose.yml` with a `web2api` service, runtime env defaults, and a `/health` curl healthcheck.
 - 2026-02-18: E2E coverage lives in `tests/e2e/test_e2e.py`; it runs `docker compose up --build -d`, validates Hacker News read/search and `/api/sites`, and auto-skips when Docker or live network access is unavailable.
+- 2026-02-18: Coverage verification for task 7.4 passed with `pytest tests/unit tests/integration --cov=web2api --cov-report=term-missing --timeout=30` at `TOTAL 86%`, so no additional coverage-gap tests were required to meet the ≥80% target.

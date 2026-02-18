@@ -55,7 +55,7 @@
 - [x] 7.1 — Create `Dockerfile`: Python 3.12-slim base, install deps, install Playwright + Chromium, copy app + recipes, expose port 8000
 - [x] 7.2 — Create `docker-compose.yml`: service definition, environment variables, health check
 - [x] 7.3 — Write E2E tests: build container, wait for health, call HN read endpoint (validate schema, non-empty items, pagination), call HN search endpoint (validate schema, query, items), call sites listing (HN present), tear down
-- [ ] 7.4 — Verify test coverage ≥ 80% with `pytest-cov`, add any missing tests
+- [x] 7.4 — Verify test coverage ≥ 80% with `pytest-cov`, add any missing tests
 
 ## Phase 8: Polish
 
