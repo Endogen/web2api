@@ -186,7 +186,8 @@ class BrowserPool:
             raise TimeoutError("timed out waiting for a browser context") from exc
         finally:
             async with self._state_lock:
-                self._pending_waiters -= 1
+                if self._pending_waiters > 0:
+                    self._pending_waiters -= 1
 
         try:
             page = await slot.context.new_page()

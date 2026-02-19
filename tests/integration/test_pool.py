@@ -199,3 +199,23 @@ async def test_pool_health_reports_expected_fields(monkeypatch: pytest.MonkeyPat
 
     await pool.release(page)
     await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_pool_waiters_do_not_go_negative_when_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_playwright(monkeypatch)
+    pool = BrowserPool(max_contexts=1, acquire_timeout=0.05)
+    await pool.start()
+
+    page = await pool.acquire()
+    waiter = asyncio.create_task(pool.acquire(timeout=0.05))
+    await asyncio.sleep(0.01)
+    assert pool.health["queue_size"] == 1
+
+    await pool.stop()
+    with pytest.raises(TimeoutError):
+        await waiter
+
+    assert pool.health["queue_size"] == 0
+    await pool.release(page)
+    assert page.closed is True

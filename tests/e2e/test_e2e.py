@@ -17,7 +17,7 @@ from web2api.schemas import ApiResponse
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = PROJECT_ROOT / "docker-compose.yml"
-BASE_URL = "http://127.0.0.1:8000"
+BASE_URL = "http://127.0.0.1:8010"
 HEALTH_TIMEOUT_SECONDS = 180
 HEALTH_POLL_INTERVAL_SECONDS = 2.0
 LIVE_ERROR_MARKERS = (

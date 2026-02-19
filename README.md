@@ -10,6 +10,7 @@ Web2API loads recipe folders from `recipes/` at startup. Each recipe defines end
 - **Declarative YAML recipes** with selectors, actions, transforms, and pagination
 - **Custom Python scrapers** for interactive sites (e.g. typing text, waiting for dynamic content)
 - **Shared browser/context pool** for concurrent Playwright requests
+- **In-memory response cache** with stale-while-revalidate
 - **Unified JSON response schema** across all recipes and endpoints
 - **Docker deployment** with auto-restart
 
@@ -28,27 +29,39 @@ curl -s http://localhost:8010/health | jq
 curl -s http://localhost:8010/api/sites | jq
 ```
 
-## Included Recipes
+## Discover Recipes
 
-### Hacker News (`hackernews`)
-
-```bash
-# Front page stories
-curl -s "http://localhost:8010/hackernews/read?page=1" | jq
-
-# Search via Algolia
-curl -s "http://localhost:8010/hackernews/search?q=python&page=1" | jq
-```
-
-### DeepL Translator (`deepl`)
+Recipe availability is dynamic. Use discovery endpoints instead of relying on a static README list.
 
 ```bash
-# German → English
-curl -s "http://localhost:8010/deepl/de-en?q=Hallo%20Welt" | jq
+# List all discovered sites and endpoint metadata
+curl -s "http://localhost:8010/api/sites" | jq
 
-# English → German
-curl -s "http://localhost:8010/deepl/en-de?q=Hello%20world" | jq
+# Print endpoint paths with required params
+curl -s "http://localhost:8010/api/sites" | jq -r '
+  .[] as $site
+  | $site.endpoints[]
+  | "/\($site.slug)/\(.name)  params: page" + (if .requires_query then ", q" else "" end)
+'
+
+# Print ready-to-run URL templates
+curl -s "http://localhost:8010/api/sites" | jq -r '
+  .[] as $site
+  | $site.endpoints[]
+  | "http://localhost:8010/\($site.slug)/\(.name)?"
+    + (if .requires_query then "q=<query>&" else "" end)
+    + "page=1"
+'
+
+# Example call pattern (no query endpoint)
+curl -s "http://localhost:8010/{slug}/{endpoint}?page=1" | jq
+
+# Example call pattern (query endpoint)
+curl -s "http://localhost:8010/{slug}/{endpoint}?q=hello&page=1" | jq
 ```
+
+For custom scraper parameters beyond `page` and `q`, check the specific recipe folder
+(`recipes/<slug>/scraper.py`).
 
 ## API
 
@@ -57,7 +70,7 @@ curl -s "http://localhost:8010/deepl/en-de?q=Hello%20world" | jq
 | Endpoint | Description |
 |---|---|
 | `GET /` | HTML index listing all recipes and endpoints |
-| `GET /health` | Service and browser pool health |
+| `GET /health` | Service, browser pool, and cache health |
 | `GET /api/sites` | JSON list of all recipes with endpoint metadata |
 
 ### Recipe Endpoints
@@ -66,16 +79,23 @@ All recipe endpoints follow the pattern: `GET /{slug}/{endpoint}?page=1&q=...`
 
 - `page` — pagination (default: 1)
 - `q` — query text (required when `requires_query: true`)
+- additional query params are passed to custom scrapers
+- extra query param names must match `[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}` and values are capped at 512 chars
 
 ### Error Codes
 
 | HTTP | Code | When |
 |---|---|---|
-| 400 | `INVALID_PARAMS` | Missing required `q` parameter |
-| 400 | `CAPABILITY_NOT_SUPPORTED` | Endpoint not defined for recipe |
+| 400 | `INVALID_PARAMS` | Missing required `q` or invalid extra query parameters |
 | 404 | — | Unknown recipe or endpoint |
 | 502 | `SCRAPE_FAILED` | Browser/upstream failure |
 | 504 | `SCRAPE_TIMEOUT` | Scrape exceeded timeout |
+
+### Caching
+
+- Successful responses are cached in-memory by `(slug, endpoint, page, q, extra params)`.
+- Cache hits return `metadata.cached: true`.
+- Stale entries can be served immediately while a background refresh updates the cache.
 
 ### Response Shape
 
@@ -121,6 +141,7 @@ recipes/
 ```
 
 - Folder name must match `slug`
+- `slug` cannot be a reserved system route (`api`, `health`, `docs`, `openapi`, `redoc`)
 - Restart the service to pick up new or changed recipes
 - Invalid recipes are skipped with warning logs
 
@@ -181,6 +202,9 @@ endpoints:
 | `items` | yes | Container selector + field definitions |
 | `pagination` | yes | Pagination strategy (`page_param`, `offset_param`, or `next_link`) |
 
+Pagination notes:
+`{page}` resolves to `start + ((api_page - 1) * step)`.
+
 ### Actions
 
 | Type | Parameters |
@@ -226,7 +250,8 @@ class Scraper(BaseScraper):
 
 - `supports(endpoint)` — declare which endpoints use custom scraping
 - `scrape(endpoint, page, params)` — `page` is blank, you must `goto()` yourself
-- `params` contains `page` (int) and `query` (str | None)
+- `params` always contains `page` (int) and `query` (str | None)
+- `params` also includes validated extra query params (for example `count`)
 - Endpoints not handled by the scraper fall back to declarative YAML
 
 ## Configuration
@@ -241,8 +266,13 @@ Environment variables (with defaults):
 | `POOL_PAGE_TIMEOUT` | 15000 | Page navigation timeout (ms) |
 | `POOL_QUEUE_SIZE` | 20 | Max queued requests |
 | `SCRAPE_TIMEOUT` | 30 | Overall scrape timeout (seconds) |
+| `CACHE_ENABLED` | true | Enable in-memory response caching |
+| `CACHE_TTL_SECONDS` | 30 | Fresh cache duration in seconds |
+| `CACHE_STALE_TTL_SECONDS` | 120 | Stale-while-revalidate window in seconds |
+| `CACHE_MAX_ENTRIES` | 500 | Maximum cached request variants |
 | `RECIPES_DIR` | `./recipes` | Path to recipes directory |
-| `LOG_LEVEL` | `info` | Log level |
+| `BIRD_AUTH_TOKEN` | empty | X/Twitter auth token for `x` recipe |
+| `BIRD_CT0` | empty | X/Twitter ct0 token for `x` recipe |
 
 ## Testing
 

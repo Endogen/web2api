@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 ActionType = Literal["wait", "click", "scroll", "type", "sleep", "evaluate"]
 PaginationType = Literal["page_param", "next_link", "offset_param"]
 FieldContext = Literal["self", "next_sibling", "parent"]
+RESERVED_RECIPE_SLUGS = {"api", "health", "docs", "openapi", "redoc"}
 FieldTransform = Literal[
     "regex_int",
     "regex_float",
@@ -130,6 +131,9 @@ class RecipeConfig(BaseModel):
         """Ensure at least one endpoint is defined and names are valid."""
         if not self.endpoints:
             raise ValueError("at least one endpoint must be defined")
+        if self.slug in RESERVED_RECIPE_SLUGS:
+            reserved = ", ".join(sorted(RESERVED_RECIPE_SLUGS))
+            raise ValueError(f"recipe slug '{self.slug}' is reserved ({reserved})")
         import re
 
         name_pattern = re.compile(r"^[a-z0-9][a-z0-9_-]*$")

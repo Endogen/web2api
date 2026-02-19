@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -28,12 +29,21 @@ from web2api.schemas import (
 from web2api.scraper import ScrapeResult
 
 logger = logging.getLogger(__name__)
+TransformHandler = Callable[[str, str], Any]
+
+
+class _TransformFailure(Exception):
+    """Expected transform failure with a structured reason."""
+
+    def __init__(self, *, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 def build_url(endpoint: EndpointConfig, *, page: int, query: str | None = None) -> str:
     """Build a request URL by resolving recipe template placeholders."""
     current_page = max(page, 1)
-    mapped_page = endpoint.pagination.start + (current_page - 1)
+    mapped_page = endpoint.pagination.start + ((current_page - 1) * endpoint.pagination.step)
     page_zero = current_page - 1
     encoded_query = quote_plus(query or "")
 
@@ -83,6 +93,49 @@ async def extract_items(
     return items
 
 
+def _transform_strip(raw_text: str, _base_url: str) -> str:
+    return raw_text.strip()
+
+
+def _transform_strip_html(raw_text: str, _base_url: str) -> str:
+    return re.sub(r"<[^>]+>", "", raw_text).strip()
+
+
+def _transform_regex_int(raw_text: str, _base_url: str) -> int:
+    match = re.search(r"-?\d+", raw_text)
+    if match is None:
+        raise _TransformFailure(reason="no_match")
+    return int(match.group(0))
+
+
+def _transform_regex_float(raw_text: str, _base_url: str) -> float:
+    match = re.search(r"-?\d+(?:\.\d+)?", raw_text)
+    if match is None:
+        raise _TransformFailure(reason="no_match")
+    return float(match.group(0))
+
+
+def _transform_iso_date(raw_text: str, _base_url: str) -> str:
+    transformed = _to_iso_date(raw_text)
+    if transformed is None:
+        raise _TransformFailure(reason="unparseable_date")
+    return transformed
+
+
+def _transform_absolute_url(raw_text: str, base_url: str) -> str:
+    return urljoin(base_url, raw_text)
+
+
+_TRANSFORM_HANDLERS: dict[str, TransformHandler] = {
+    "strip": _transform_strip,
+    "strip_html": _transform_strip_html,
+    "regex_int": _transform_regex_int,
+    "regex_float": _transform_regex_float,
+    "iso_date": _transform_iso_date,
+    "absolute_url": _transform_absolute_url,
+}
+
+
 def apply_transform(value: Any, transform: str | None, *, base_url: str) -> Any:
     """Apply a field transform, returning ``None`` on transform failure."""
     if value is None:
@@ -91,66 +144,21 @@ def apply_transform(value: Any, transform: str | None, *, base_url: str) -> Any:
         return value
 
     raw_text = str(value)
-    if transform == "strip":
-        try:
-            return raw_text.strip()
-        except Exception as exc:  # noqa: BLE001
-            _log_transform_failure(transform=transform, value=raw_text, error=exc)
-            return None
-    if transform == "strip_html":
-        try:
-            return re.sub(r"<[^>]+>", "", raw_text).strip()
-        except Exception as exc:  # noqa: BLE001
-            _log_transform_failure(transform=transform, value=raw_text, error=exc)
-            return None
-    if transform == "regex_int":
-        try:
-            match = re.search(r"-?\d+", raw_text)
-            if match is None:
-                _log_transform_failure(
-                    transform=transform,
-                    value=raw_text,
-                    reason="no_match",
-                )
-                return None
-            return int(match.group(0))
-        except Exception as exc:  # noqa: BLE001
-            _log_transform_failure(transform=transform, value=raw_text, error=exc)
-            return None
-    if transform == "regex_float":
-        try:
-            match = re.search(r"-?\d+(?:\.\d+)?", raw_text)
-            if match is None:
-                _log_transform_failure(
-                    transform=transform,
-                    value=raw_text,
-                    reason="no_match",
-                )
-                return None
-            return float(match.group(0))
-        except Exception as exc:  # noqa: BLE001
-            _log_transform_failure(transform=transform, value=raw_text, error=exc)
-            return None
-    if transform == "iso_date":
-        try:
-            transformed = _to_iso_date(raw_text)
-            if transformed is None:
-                _log_transform_failure(
-                    transform=transform,
-                    value=raw_text,
-                    reason="unparseable_date",
-                )
-            return transformed
-        except Exception as exc:  # noqa: BLE001
-            _log_transform_failure(transform=transform, value=raw_text, error=exc)
-            return None
-    if transform == "absolute_url":
-        try:
-            return urljoin(base_url, raw_text)
-        except Exception as exc:  # noqa: BLE001
-            _log_transform_failure(transform=transform, value=raw_text, error=exc)
-            return None
-    raise ValueError(f"unknown transform '{transform}'")
+    handler = _TRANSFORM_HANDLERS.get(transform)
+    if handler is None:
+        raise ValueError(f"unknown transform '{transform}'")
+    try:
+        return handler(raw_text, base_url)
+    except _TransformFailure as exc:
+        _log_transform_failure(
+            transform=transform,
+            value=raw_text,
+            reason=exc.reason,
+        )
+        return None
+    except Exception as exc:  # noqa: BLE001
+        _log_transform_failure(transform=transform, value=raw_text, error=exc)
+        return None
 
 
 def _log_transform_failure(

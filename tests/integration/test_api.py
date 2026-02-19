@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +11,7 @@ import pytest
 import yaml
 from httpx import ASGITransport, AsyncClient
 
+from web2api.cache import ResponseCache
 from web2api.main import create_app
 from web2api.schemas import (
     ApiResponse,
@@ -168,9 +170,10 @@ async def test_api_routes_and_index(
         endpoint: str,
         page: int = 1,
         query: str | None = None,
+        extra_params: dict[str, str] | None = None,
         scrape_timeout: float = 30.0,
     ) -> ApiResponse:
-        _ = pool
+        _ = pool, extra_params, scrape_timeout
         ep_config = recipe.config.endpoints.get(endpoint)
         if ep_config is None:
             return _error_response(
@@ -226,6 +229,11 @@ async def test_api_routes_and_index(
                 assert invalid_query_resp.status_code == 400
                 assert invalid_query_resp.json()["error"]["code"] == "INVALID_PARAMS"
 
+                # Invalid extra query parameter name
+                invalid_extra_resp = await client.get("/alpha/read?bad!param=1")
+                assert invalid_extra_resp.status_code == 400
+                assert invalid_extra_resp.json()["error"]["code"] == "INVALID_PARAMS"
+
                 # Non-existent endpoint on a recipe (404 from FastAPI)
                 unknown_ep_resp = await client.get("/beta/search")
                 assert unknown_ep_resp.status_code == 404
@@ -249,6 +257,7 @@ async def test_api_routes_and_index(
                 assert health_resp.status_code == 200
                 assert health_resp.json()["status"] == "ok"
                 assert health_resp.json()["recipes"] == 2
+                assert health_resp.json()["cache"]["enabled"] is True
 
                 # Index page
                 index_resp = await client.get("/")
@@ -267,3 +276,62 @@ async def test_api_routes_and_index(
 
     assert fake_pool.started is True
     assert fake_pool.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_response_cache_serves_fresh_and_stale_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recipes_dir = tmp_path / "recipes"
+    _write_recipe(recipes_dir, "alpha")
+
+    call_count = 0
+
+    async def fake_scrape(
+        *,
+        pool: FakePool,
+        recipe,
+        endpoint: str,
+        page: int = 1,
+        query: str | None = None,
+        extra_params: dict[str, str] | None = None,
+        scrape_timeout: float = 30.0,
+    ) -> ApiResponse:
+        _ = pool, recipe, endpoint, query, extra_params, scrape_timeout
+        nonlocal call_count
+        call_count += 1
+        await asyncio.sleep(0.02)
+        return _success_response(slug="alpha", endpoint="read", page=page)
+
+    monkeypatch.setattr("web2api.main.scrape", fake_scrape)
+    fake_pool = FakePool()
+    app = create_app(
+        recipes_dir=recipes_dir,
+        pool=fake_pool,
+        response_cache=ResponseCache(
+            ttl_seconds=0.05,
+            stale_ttl_seconds=0.25,
+            max_entries=16,
+        ),
+    )
+
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            first = await client.get("/alpha/read?page=1")
+            assert first.status_code == 200
+            assert first.json()["metadata"]["cached"] is False
+
+            second = await client.get("/alpha/read?page=1")
+            assert second.status_code == 200
+            assert second.json()["metadata"]["cached"] is True
+            assert call_count == 1
+
+            await asyncio.sleep(0.06)
+            stale = await client.get("/alpha/read?page=1")
+            assert stale.status_code == 200
+            assert stale.json()["metadata"]["cached"] is True
+
+            await asyncio.sleep(0.15)
+            assert call_count >= 2

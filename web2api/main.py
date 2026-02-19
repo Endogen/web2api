@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -14,6 +16,7 @@ from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
+from web2api.cache import CacheKey, ResponseCache
 from web2api.engine import scrape
 from web2api.logging_utils import (
     REQUEST_ID_HEADER,
@@ -24,16 +27,32 @@ from web2api.logging_utils import (
 )
 from web2api.pool import BrowserPool
 from web2api.registry import Recipe, RecipeRegistry
-from web2api.schemas import ErrorResponse
+from web2api.schemas import (
+    ApiResponse,
+    ErrorCode,
+    ErrorResponse,
+    MetadataResponse,
+    PaginationResponse,
+    SiteInfo,
+)
 
 RouteEndpoint = Callable[..., Awaitable[JSONResponse]]
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 logger = logging.getLogger(__name__)
+_EXTRA_PARAM_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+_MAX_EXTRA_PARAM_VALUE_LENGTH = 512
 
 
 def _default_recipes_dir() -> Path:
     """Return the default recipes directory path."""
     return Path(__file__).resolve().parent.parent / "recipes"
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _status_code_for_error(error: ErrorResponse | None) -> int:
@@ -70,6 +89,78 @@ def _site_payload(recipe: Recipe) -> dict[str, Any]:
     }
 
 
+def _build_error_response(
+    *,
+    recipe: Recipe,
+    endpoint: str,
+    current_page: int,
+    query: str | None,
+    code: ErrorCode,
+    message: str,
+) -> ApiResponse:
+    return ApiResponse(
+        site=SiteInfo(
+            name=recipe.config.name,
+            slug=recipe.config.slug,
+            url=recipe.config.base_url,
+        ),
+        endpoint=endpoint,
+        query=query if recipe.config.endpoints[endpoint].requires_query else None,
+        items=[],
+        pagination=PaginationResponse(
+            current_page=current_page,
+            has_next=False,
+            has_prev=current_page > 1,
+            total_pages=None,
+            total_items=None,
+        ),
+        metadata=MetadataResponse(
+            scraped_at=datetime.now(UTC),
+            response_time_ms=0,
+            item_count=0,
+            cached=False,
+        ),
+        error=ErrorResponse(code=code, message=message, details=None),
+    )
+
+
+def _collect_extra_params(request: Request) -> tuple[dict[str, str] | None, str | None]:
+    extras: dict[str, str] = {}
+    for key, value in request.query_params.items():
+        if key in {"page", "q"}:
+            continue
+        if not _EXTRA_PARAM_PATTERN.match(key):
+            return None, (
+                f"invalid query parameter '{key}': names must match "
+                "[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}"
+            )
+        if len(value) > _MAX_EXTRA_PARAM_VALUE_LENGTH:
+            return None, (
+                f"invalid query parameter '{key}': value length exceeds "
+                f"{_MAX_EXTRA_PARAM_VALUE_LENGTH}"
+            )
+        extras[key] = value
+    return extras or None, None
+
+
+def _cache_key_for_request(
+    *,
+    slug: str,
+    endpoint: str,
+    page: int,
+    query: str | None,
+    extra_params: dict[str, str] | None,
+) -> CacheKey:
+    params = tuple(sorted(extra_params.items())) if extra_params else ()
+    return (slug, endpoint, page, query, params)
+
+
+def _with_cached_metadata(response: ApiResponse) -> ApiResponse:
+    cached_response = response.model_copy(deep=True)
+    cached_response.metadata.cached = True
+    return cached_response
+
+
 def _create_recipe_handler(recipe: Recipe, endpoint_name: str) -> RouteEndpoint:
     """Create a route handler bound to a specific recipe endpoint."""
 
@@ -78,19 +169,55 @@ def _create_recipe_handler(recipe: Recipe, endpoint_name: str) -> RouteEndpoint:
         page: int = Query(default=1, ge=1),
         q: str | None = Query(default=None),
     ) -> JSONResponse:
-        # Pass any extra query params (beyond page/q) to the scraper
-        extra_params = {
-            k: v for k, v in request.query_params.items() if k not in {"page", "q"}
-        }
-        response = await scrape(
-            pool=request.app.state.pool,
-            recipe=recipe,
-            endpoint=endpoint_name,
-            page=page,
-            query=q,
-            extra_params=extra_params or None,
-            scrape_timeout=request.app.state.scrape_timeout,
-        )
+        extra_params, extra_error = _collect_extra_params(request)
+        if extra_error is not None:
+            response = _build_error_response(
+                recipe=recipe,
+                endpoint=endpoint_name,
+                current_page=page,
+                query=q,
+                code="INVALID_PARAMS",
+                message=extra_error,
+            )
+            return JSONResponse(
+                content=response.model_dump(mode="json"),
+                status_code=_status_code_for_error(response.error),
+            )
+
+        async def _run_scrape() -> ApiResponse:
+            return await scrape(
+                pool=request.app.state.pool,
+                recipe=recipe,
+                endpoint=endpoint_name,
+                page=page,
+                query=q,
+                extra_params=extra_params,
+                scrape_timeout=request.app.state.scrape_timeout,
+            )
+
+        response_cache: ResponseCache | None = getattr(request.app.state, "response_cache", None)
+        cache_key: CacheKey | None = None
+        if response_cache is not None:
+            cache_key = _cache_key_for_request(
+                slug=recipe.config.slug,
+                endpoint=endpoint_name,
+                page=page,
+                query=q,
+                extra_params=extra_params,
+            )
+            cache_lookup = await response_cache.get(cache_key)
+            if cache_lookup.response is not None:
+                if cache_lookup.state == "stale":
+                    await response_cache.trigger_refresh(cache_key, _run_scrape)
+                cached_response = _with_cached_metadata(cache_lookup.response)
+                return JSONResponse(
+                    content=cached_response.model_dump(mode="json"),
+                    status_code=_status_code_for_error(cached_response.error),
+                )
+
+        response = await _run_scrape()
+        if response_cache is not None and cache_key is not None:
+            await response_cache.set(cache_key, response)
         return JSONResponse(
             content=response.model_dump(mode="json"),
             status_code=_status_code_for_error(response.error),
@@ -117,6 +244,7 @@ def create_app(
     pool: BrowserPool | None = None,
     registry: RecipeRegistry | None = None,
     scrape_timeout: float | None = None,
+    response_cache: ResponseCache | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application."""
     logging.getLogger("web2api").setLevel(logging.INFO)
@@ -138,6 +266,14 @@ def create_app(
         env_recipes = os.environ.get("RECIPES_DIR")
         effective_recipes_dir = Path(env_recipes) if env_recipes else _default_recipes_dir()
     recipe_registry.discover(effective_recipes_dir)
+    cache_enabled = _env_bool("CACHE_ENABLED", default=True)
+    active_response_cache = response_cache
+    if active_response_cache is None and cache_enabled:
+        active_response_cache = ResponseCache(
+            ttl_seconds=float(os.environ.get("CACHE_TTL_SECONDS", "30")),
+            stale_ttl_seconds=float(os.environ.get("CACHE_STALE_TTL_SECONDS", "120")),
+            max_entries=int(os.environ.get("CACHE_MAX_ENTRIES", "500")),
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -145,6 +281,7 @@ def create_app(
         app.state.pool = browser_pool
         app.state.registry = recipe_registry
         app.state.scrape_timeout = effective_scrape_timeout
+        app.state.response_cache = active_response_cache
         try:
             yield
         finally:
@@ -204,8 +341,6 @@ def create_app(
         finally:
             reset_request_id(token)
 
-    _register_recipe_routes(app, recipe_registry)
-
     @app.get("/api/sites")
     async def list_sites() -> list[dict[str, Any]]:
         """Return metadata for all discovered recipe sites."""
@@ -215,11 +350,18 @@ def create_app(
     async def health() -> JSONResponse:
         """Return service and browser pool health status."""
         pool_health = browser_pool.health
+        cache_health: dict[str, int | float | bool]
+        if active_response_cache is None:
+            cache_health = {"enabled": False}
+        else:
+            cache_health = await active_response_cache.stats()
+
         if not pool_health["browser_connected"]:
             return JSONResponse(
                 content={
                     "status": "degraded",
                     "pool": pool_health,
+                    "cache": cache_health,
                     "recipes": recipe_registry.count,
                 },
                 status_code=503,
@@ -228,6 +370,7 @@ def create_app(
             content={
                 "status": "ok",
                 "pool": pool_health,
+                "cache": cache_health,
                 "recipes": recipe_registry.count,
             },
         )
@@ -241,6 +384,10 @@ def create_app(
             name="index.html",
             context={"sites": sites},
         )
+
+    # Register dynamic recipe routes after framework routes so static endpoints
+    # keep precedence even if a recipe path shape overlaps.
+    _register_recipe_routes(app, recipe_registry)
 
     return app
 

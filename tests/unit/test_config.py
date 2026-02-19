@@ -141,3 +141,12 @@ def test_slug_matching_validation() -> None:
 
     with pytest.raises(ValueError):
         parse_recipe_config(mismatch, folder_name="example")
+
+
+def test_reserved_slug_is_rejected() -> None:
+    """System route slugs should not be allowed for recipes."""
+    data = _valid_recipe_data()
+    data["slug"] = "api"
+
+    with pytest.raises(ValidationError):
+        RecipeConfig.model_validate(data)
