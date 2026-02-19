@@ -6,104 +6,340 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔌</text></svg>" />
     <title>Web2API</title>
     <style>
+      :root {
+        --bg-cream: #f4f1e6;
+        --bg-paper: #fffcf4;
+        --ink: #1f2a30;
+        --ink-muted: #5d6b73;
+        --teal: #085f63;
+        --teal-soft: #d7efee;
+        --amber: #f5a524;
+        --line: #dcd6c9;
+        --shadow: 0 20px 40px rgba(10, 25, 35, 0.1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
       body {
-        font-family: "Segoe UI", sans-serif;
-        margin: 2rem;
-        color: #1f2933;
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        font-family: "Trebuchet MS", "Lucida Sans Unicode", "Lucida Grande", sans-serif;
+        background:
+          radial-gradient(circle at 12% 10%, rgba(245, 165, 36, 0.22), transparent 34%),
+          radial-gradient(circle at 88% 0%, rgba(8, 95, 99, 0.2), transparent 36%),
+          linear-gradient(165deg, var(--bg-cream), #efe7d3 50%, #f7f3e8);
+      }
+
+      .page {
+        width: min(1120px, calc(100% - 2rem));
+        margin: 2rem auto 3rem;
+      }
+
+      .hero {
+        border: 1px solid rgba(8, 95, 99, 0.2);
+        background: linear-gradient(130deg, rgba(255, 252, 244, 0.95), rgba(239, 252, 249, 0.75));
+        border-radius: 22px;
+        padding: 1.5rem 1.5rem 1.25rem;
+        box-shadow: var(--shadow);
+        animation: rise-in 520ms ease both;
+      }
+
+      .hero-label {
+        display: inline-block;
+        margin-bottom: 0.6rem;
+        padding: 0.22rem 0.55rem;
+        border-radius: 999px;
+        font-size: 0.76rem;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        color: var(--teal);
+        background: var(--teal-soft);
+        border: 1px solid rgba(8, 95, 99, 0.22);
       }
 
       h1 {
-        margin-bottom: 0.5rem;
+        margin: 0;
+        font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+        font-size: clamp(1.9rem, 2.7vw, 2.7rem);
+        letter-spacing: 0.01em;
       }
 
       .subtitle {
-        color: #52606d;
-        margin-bottom: 1.5rem;
+        margin: 0.6rem 0 0;
+        max-width: 68ch;
+        color: var(--ink-muted);
+        line-height: 1.5;
       }
 
-      table {
-        width: 100%;
-        border-collapse: collapse;
+      .subtitle code {
+        padding: 0.08rem 0.33rem;
+        border-radius: 0.35rem;
+        background: rgba(8, 95, 99, 0.12);
+        color: var(--teal);
+        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono",
+          monospace;
       }
 
-      th,
-      td {
-        border-bottom: 1px solid #d9e2ec;
-        padding: 0.75rem;
-        text-align: left;
-        vertical-align: top;
+      .stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.55rem;
+        margin-top: 1rem;
       }
 
-      th {
-        background: #f0f4f8;
-      }
-
-      .endpoint {
-        display: inline-block;
-        margin-right: 0.5rem;
-        margin-bottom: 0.25rem;
-        padding: 0.15rem 0.5rem;
+      .stat {
+        padding: 0.22rem 0.5rem;
+        border: 1px solid var(--line);
         border-radius: 999px;
-        background: #e4f7ec;
-        color: #127947;
-        font-size: 0.85rem;
-      }
-
-      .endpoint-link {
-        text-decoration: none;
-        color: inherit;
-      }
-
-      .endpoint-link:hover {
-        text-decoration: underline;
-      }
-
-      .endpoint-desc {
-        color: #52606d;
         font-size: 0.8rem;
-        margin-left: 0.25rem;
+        color: #34434a;
+        background: rgba(255, 255, 255, 0.7);
+      }
+
+      .cards {
+        margin-top: 1.1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+      }
+
+      .card {
+        background: var(--bg-paper);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 1rem 1rem 0.9rem;
+        box-shadow: 0 8px 18px rgba(10, 25, 35, 0.06);
+        display: grid;
+        grid-template-columns: minmax(220px, 1.35fr) minmax(190px, 1fr) minmax(280px, 1.45fr);
+        gap: 0.7rem 1rem;
+        align-items: start;
+        animation: rise-in 460ms ease both;
+        animation-delay: calc(var(--i, 0) * 60ms);
+      }
+
+      .card:hover {
+        transform: translateX(2px);
+        border-color: rgba(8, 95, 99, 0.32);
+        box-shadow: 0 16px 30px rgba(10, 25, 35, 0.13);
+      }
+
+      .site-meta {
+        min-width: 0;
+      }
+
+      .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.9rem;
+      }
+
+      .site-name {
+        margin: 0;
+        font-size: 1.18rem;
+        font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+      }
+
+      .slug {
+        margin: 0;
+        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono",
+          monospace;
+        font-size: 0.78rem;
+        color: var(--teal);
+        background: var(--teal-soft);
+        border: 1px solid rgba(8, 95, 99, 0.22);
+        border-radius: 0.5rem;
+        padding: 0.15rem 0.42rem;
+        white-space: nowrap;
+      }
+
+      .desc {
+        margin: 0.48rem 0 0;
+        color: var(--ink-muted);
+        line-height: 1.42;
+        font-size: 0.94rem;
+      }
+
+      .block {
+        min-width: 0;
+      }
+
+      .block-title {
+        margin: 0 0 0.38rem;
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #5f6f78;
+      }
+
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.42rem;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.32rem;
+        border-radius: 999px;
+        padding: 0.2rem 0.52rem;
+        font-size: 0.78rem;
+        background: #ebf5f4;
+        border: 1px solid rgba(8, 95, 99, 0.18);
+        color: #0e4a4f;
+      }
+
+      .chip-query {
+        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono",
+          monospace;
+        font-size: 0.68rem;
+        padding: 0.08rem 0.24rem;
+        border-radius: 0.35rem;
+        color: #744700;
+        background: rgba(245, 165, 36, 0.2);
+      }
+
+      .links {
+        display: grid;
+        gap: 0.42rem;
+      }
+
+      .link {
+        color: #11474d;
+        text-decoration: none;
+        border: 1px solid rgba(8, 95, 99, 0.18);
+        background: rgba(8, 95, 99, 0.05);
+        padding: 0.45rem 0.55rem;
+        border-radius: 0.62rem;
+        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono",
+          monospace;
+        font-size: 0.78rem;
+        transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+      }
+
+      .link:hover {
+        border-color: rgba(8, 95, 99, 0.4);
+        background: rgba(8, 95, 99, 0.11);
+        transform: translateX(1px);
+      }
+
+      .link:focus-visible {
+        outline: 2px solid var(--amber);
+        outline-offset: 1px;
+      }
+
+      .empty {
+        border: 1px dashed rgba(8, 95, 99, 0.32);
+        border-radius: 16px;
+        padding: 1.3rem 1rem;
+        background: rgba(255, 255, 255, 0.68);
+        color: var(--ink-muted);
+      }
+
+      @media (max-width: 700px) {
+        .page {
+          width: calc(100% - 1rem);
+          margin: 1rem auto 2rem;
+        }
+
+        .hero {
+          padding: 1rem 1rem 0.9rem;
+        }
+
+        .card {
+          padding: 0.88rem;
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 980px) {
+        .card {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+
+      @keyframes rise-in {
+        from {
+          opacity: 0;
+          transform: translateY(12px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
       }
     </style>
   </head>
   <body>
-    <h1>Web2API</h1>
-    <p class="subtitle">Available scraped APIs discovered from the <code>recipes/</code> directory.</p>
+    <main class="page">
+      <header class="hero">
+        <span class="hero-label">Live Catalog</span>
+        <h1>Web2API Recipes</h1>
+        <p class="subtitle">
+          Available scraped APIs discovered from the <code>recipes/</code> directory.
+          Endpoints marked with <code>q</code> require a query parameter.
+        </p>
+        <div class="stats">
+          <span class="stat">{{ sites|length }} discovered site{% if sites|length != 1 %}s{% endif %}</span>
+          <span class="stat">Path pattern: /&lt;slug&gt;/&lt;endpoint&gt;</span>
+        </div>
+      </header>
 
-    <table>
-      <thead>
-        <tr>
-          <th>Site</th>
-          <th>Description</th>
-          <th>Endpoints</th>
-          <th>Try It</th>
-        </tr>
-      </thead>
-      <tbody>
+      <section class="cards">
+        {% if sites %}
         {% for site in sites %}
-        <tr>
-          <td>
-            <strong>{{ site.name }}</strong><br />
-            <code>{{ site.slug }}</code>
-          </td>
-          <td>{{ site.description }}</td>
-          <td>
-            {% for ep in site.endpoints %}
-            <span class="endpoint">{{ ep.name }}{% if ep.requires_query %} (q){% endif %}</span>
-            {% endfor %}
-          </td>
-          <td>
-            {% for ep in site.endpoints %}
-            {% if ep.requires_query %}
-            <a href="{{ ep.link }}?q=example">{{ ep.name }}</a>
-            {% else %}
-            <a href="{{ ep.link }}">{{ ep.name }}</a>
-            {% endif %}
-            {% if not loop.last %} | {% endif %}
-            {% endfor %}
-          </td>
-        </tr>
+        <article class="card" style="--i: {{ loop.index0 }};">
+          <div class="site-meta">
+            <div class="card-head">
+              <h2 class="site-name">{{ site.name }}</h2>
+              <p class="slug">{{ site.slug }}</p>
+            </div>
+            <p class="desc">{{ site.description }}</p>
+          </div>
+          <div class="block">
+            <p class="block-title">Endpoints</p>
+            <div class="chips">
+              {% for ep in site.endpoints %}
+              <span class="chip">
+                {{ ep.name }}
+                {% if ep.requires_query %}
+                <span class="chip-query">q</span>
+                {% endif %}
+              </span>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="block">
+            <p class="block-title">Try It</p>
+            <div class="links">
+              {% for ep in site.endpoints %}
+              {% if ep.requires_query %}
+              <a class="link" href="{{ ep.link }}?q=example&page=1">{{ ep.link }}?q=example&page=1</a>
+              {% else %}
+              <a class="link" href="{{ ep.link }}?page=1">{{ ep.link }}?page=1</a>
+              {% endif %}
+              {% endfor %}
+            </div>
+          </div>
+        </article>
         {% endfor %}
-      </tbody>
-    </table>
+        {% else %}
+        <div class="empty">
+          No recipe APIs found. Add a folder under <code>recipes/</code> and restart the service.
+        </div>
+        {% endif %}
+      </section>
+    </main>
   </body>
 </html>
