@@ -3,19 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔌</text></svg>" />
-    <title>Web2API</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='16' fill='%23114f55'/><path d='M31 23h38v12h-8v8h8v12H31V43h8v-8h-8z' fill='%23f9f2de'/><rect x='39' y='58' width='22' height='14' rx='3' fill='%23f0aa2d'/></svg>"
+    />
+    <title>Web2API Catalog</title>
     <style>
       :root {
-        --bg-cream: #f4f1e6;
-        --bg-paper: #fffcf4;
-        --ink: #1f2a30;
-        --ink-muted: #5d6b73;
-        --teal: #085f63;
-        --teal-soft: #d7efee;
-        --amber: #f5a524;
-        --line: #dcd6c9;
-        --shadow: 0 20px 40px rgba(10, 25, 35, 0.1);
+        --bg-1: #f6f2e7;
+        --bg-2: #ede3cf;
+        --paper: #fffdf6;
+        --ink: #1b2a2e;
+        --ink-dim: #5b6a72;
+        --teal-900: #114f55;
+        --teal-700: #1e6c74;
+        --teal-100: #d8eceb;
+        --amber: #f0aa2d;
+        --line: #d8cfbf;
+        --shadow-soft: 0 14px 30px rgba(20, 35, 40, 0.08);
+        --shadow-strong: 0 20px 40px rgba(20, 35, 40, 0.12);
       }
 
       * {
@@ -26,218 +32,319 @@
         margin: 0;
         min-height: 100vh;
         color: var(--ink);
-        font-family: "Trebuchet MS", "Lucida Sans Unicode", "Lucida Grande", sans-serif;
+        font-family: "Gill Sans", "Trebuchet MS", "Lucida Sans Unicode", sans-serif;
         background:
-          radial-gradient(circle at 12% 10%, rgba(245, 165, 36, 0.22), transparent 34%),
-          radial-gradient(circle at 88% 0%, rgba(8, 95, 99, 0.2), transparent 36%),
-          linear-gradient(165deg, var(--bg-cream), #efe7d3 50%, #f7f3e8);
+          radial-gradient(circle at 0% 0%, rgba(240, 170, 45, 0.2), transparent 32%),
+          radial-gradient(circle at 100% 0%, rgba(17, 79, 85, 0.2), transparent 30%),
+          linear-gradient(160deg, var(--bg-1), var(--bg-2));
       }
 
       .page {
-        width: min(1120px, calc(100% - 2rem));
-        margin: 2rem auto 3rem;
+        width: min(1180px, calc(100% - 2rem));
+        margin: 1.5rem auto 2.7rem;
       }
 
       .hero {
-        border: 1px solid rgba(8, 95, 99, 0.2);
-        background: linear-gradient(130deg, rgba(255, 252, 244, 0.95), rgba(239, 252, 249, 0.75));
-        border-radius: 22px;
-        padding: 1.5rem 1.5rem 1.25rem;
-        box-shadow: var(--shadow);
-        animation: rise-in 520ms ease both;
+        border: 1px solid rgba(17, 79, 85, 0.2);
+        border-radius: 12px;
+        padding: 1.1rem;
+        background: linear-gradient(130deg, rgba(255, 253, 246, 0.94), rgba(239, 249, 248, 0.78));
+        box-shadow: var(--shadow-soft);
+        animation: lift-in 420ms ease both;
       }
 
-      .hero-label {
+      .hero-tag {
         display: inline-block;
-        margin-bottom: 0.6rem;
-        padding: 0.22rem 0.55rem;
+        margin-bottom: 0.5rem;
+        padding: 0.18rem 0.5rem;
         border-radius: 999px;
-        font-size: 0.76rem;
-        letter-spacing: 0.07em;
+        border: 1px solid rgba(17, 79, 85, 0.25);
+        color: var(--teal-900);
+        background: var(--teal-100);
         text-transform: uppercase;
-        color: var(--teal);
-        background: var(--teal-soft);
-        border: 1px solid rgba(8, 95, 99, 0.22);
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
       }
 
       h1 {
         margin: 0;
         font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
-        font-size: clamp(1.9rem, 2.7vw, 2.7rem);
-        letter-spacing: 0.01em;
+        font-size: clamp(1.8rem, 2.8vw, 2.6rem);
       }
 
       .subtitle {
-        margin: 0.6rem 0 0;
-        max-width: 68ch;
-        color: var(--ink-muted);
+        margin: 0.45rem 0 0;
+        color: var(--ink-dim);
         line-height: 1.5;
+        max-width: 76ch;
       }
 
       .subtitle code {
-        padding: 0.08rem 0.33rem;
+        padding: 0.1rem 0.3rem;
         border-radius: 0.35rem;
-        background: rgba(8, 95, 99, 0.12);
-        color: var(--teal);
-        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono",
-          monospace;
+        font-family: "Consolas", "SFMono-Regular", Menlo, monospace;
+        color: var(--teal-900);
+        background: rgba(17, 79, 85, 0.12);
       }
 
-      .stats {
+      .toolbar {
+        margin-top: 0.95rem;
+        display: grid;
+        grid-template-columns: minmax(240px, 1fr) auto;
+        gap: 0.6rem;
+        align-items: center;
+      }
+
+      .filter {
+        width: 100%;
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--ink);
+        border-radius: 9px;
+        padding: 0.62rem 0.72rem;
+        font-size: 0.95rem;
+      }
+
+      .filter:focus {
+        outline: 2px solid rgba(30, 108, 116, 0.35);
+        outline-offset: 1px;
+        border-color: rgba(30, 108, 116, 0.45);
+      }
+
+      .toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.42rem;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 0.48rem 0.58rem;
+        font-size: 0.84rem;
+        color: #34444b;
+        background: rgba(255, 255, 255, 0.84);
+      }
+
+      .toggle input {
+        accent-color: var(--teal-700);
+      }
+
+      .summary {
+        margin-top: 0.65rem;
         display: flex;
         flex-wrap: wrap;
-        gap: 0.55rem;
+        gap: 0.45rem;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        padding: 0.18rem 0.5rem;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 0.79rem;
+        color: #34444b;
+        background: rgba(255, 255, 255, 0.84);
+      }
+
+      .pill strong {
+        color: var(--teal-900);
+      }
+
+      .catalog {
         margin-top: 1rem;
       }
 
-      .stat {
-        padding: 0.22rem 0.5rem;
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        font-size: 0.8rem;
-        color: #34434a;
-        background: rgba(255, 255, 255, 0.7);
-      }
-
-      .cards {
-        margin-top: 1.1rem;
-        display: flex;
-        flex-direction: column;
-        gap: 0.75rem;
-      }
-
-      .card {
-        background: var(--bg-paper);
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        padding: 1rem 1rem 0.9rem;
-        box-shadow: 0 8px 18px rgba(10, 25, 35, 0.06);
+      .head {
         display: grid;
-        grid-template-columns: minmax(220px, 1.35fr) minmax(190px, 1fr) minmax(280px, 1.45fr);
-        gap: 0.7rem 1rem;
+        grid-template-columns: minmax(220px, 1.2fr) minmax(220px, 1.2fr) minmax(300px, 1.7fr);
+        gap: 0.8rem;
+        align-items: center;
+        margin-bottom: 0.38rem;
+        padding: 0 0.52rem;
+      }
+
+      .head span {
+        color: #5f7078;
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .row {
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--paper);
+        box-shadow: 0 8px 18px rgba(20, 35, 40, 0.06);
+        padding: 0.74rem;
+        display: grid;
+        grid-template-columns: minmax(220px, 1.2fr) minmax(220px, 1.2fr) minmax(300px, 1.7fr);
+        gap: 0.8rem;
         align-items: start;
-        animation: rise-in 460ms ease both;
-        animation-delay: calc(var(--i, 0) * 60ms);
+        margin-bottom: 0.54rem;
+        animation: lift-in 360ms ease both;
+        animation-delay: calc(var(--row-index, 0) * 42ms);
       }
 
-      .card:hover {
+      .row:hover {
+        border-color: rgba(17, 79, 85, 0.35);
+        box-shadow: var(--shadow-strong);
         transform: translateX(2px);
-        border-color: rgba(8, 95, 99, 0.32);
-        box-shadow: 0 16px 30px rgba(10, 25, 35, 0.13);
       }
 
-      .site-meta {
+      .row.is-hidden {
+        display: none;
+      }
+
+      .site {
         min-width: 0;
       }
 
-      .card-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.9rem;
-      }
-
-      .site-name {
+      .site h2 {
         margin: 0;
-        font-size: 1.18rem;
+        font-size: 1.12rem;
         font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
       }
 
       .slug {
-        margin: 0;
-        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono",
-          monospace;
-        font-size: 0.78rem;
-        color: var(--teal);
-        background: var(--teal-soft);
-        border: 1px solid rgba(8, 95, 99, 0.22);
-        border-radius: 0.5rem;
-        padding: 0.15rem 0.42rem;
-        white-space: nowrap;
+        display: inline-block;
+        margin-top: 0.25rem;
+        border: 1px solid rgba(17, 79, 85, 0.25);
+        border-radius: 0.4rem;
+        padding: 0.08rem 0.36rem;
+        font-family: "Consolas", "SFMono-Regular", Menlo, monospace;
+        font-size: 0.76rem;
+        color: var(--teal-900);
+        background: var(--teal-100);
       }
 
       .desc {
-        margin: 0.48rem 0 0;
-        color: var(--ink-muted);
-        line-height: 1.42;
-        font-size: 0.94rem;
+        margin: 0.46rem 0 0;
+        color: var(--ink-dim);
+        font-size: 0.9rem;
+        line-height: 1.4;
       }
 
-      .block {
+      .endpoints,
+      .urls {
         min-width: 0;
-      }
-
-      .block-title {
-        margin: 0 0 0.38rem;
-        font-size: 0.72rem;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: #5f6f78;
-      }
-
-      .chips {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.42rem;
-      }
-
-      .chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.32rem;
-        border-radius: 999px;
-        padding: 0.2rem 0.52rem;
-        font-size: 0.78rem;
-        background: #ebf5f4;
-        border: 1px solid rgba(8, 95, 99, 0.18);
-        color: #0e4a4f;
-      }
-
-      .chip-query {
-        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono",
-          monospace;
-        font-size: 0.68rem;
-        padding: 0.08rem 0.24rem;
-        border-radius: 0.35rem;
-        color: #744700;
-        background: rgba(245, 165, 36, 0.2);
-      }
-
-      .links {
         display: grid;
         gap: 0.42rem;
       }
 
-      .link {
-        color: #11474d;
-        text-decoration: none;
-        border: 1px solid rgba(8, 95, 99, 0.18);
-        background: rgba(8, 95, 99, 0.05);
-        padding: 0.45rem 0.55rem;
-        border-radius: 0.62rem;
-        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono",
-          monospace;
+      .endpoint-item {
+        border: 1px solid rgba(17, 79, 85, 0.15);
+        border-radius: 0.52rem;
+        padding: 0.34rem 0.45rem;
+        background: rgba(17, 79, 85, 0.04);
+      }
+
+      .endpoint-item.is-hidden,
+      .url-item.is-hidden {
+        display: none;
+      }
+
+      .endpoint-top {
+        display: flex;
+        align-items: center;
+        gap: 0.34rem;
+      }
+
+      .ep-name {
+        margin: 0;
+        font-family: "Consolas", "SFMono-Regular", Menlo, monospace;
         font-size: 0.78rem;
-        transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+        color: var(--teal-900);
       }
 
-      .link:hover {
-        border-color: rgba(8, 95, 99, 0.4);
-        background: rgba(8, 95, 99, 0.11);
-        transform: translateX(1px);
+      .q-badge {
+        border: 1px solid rgba(240, 170, 45, 0.45);
+        border-radius: 999px;
+        padding: 0.08rem 0.34rem;
+        font-family: "Consolas", "SFMono-Regular", Menlo, monospace;
+        font-size: 0.66rem;
+        color: #7b4a00;
+        background: rgba(240, 170, 45, 0.22);
       }
 
-      .link:focus-visible {
-        outline: 2px solid var(--amber);
+      .ep-desc {
+        margin: 0.24rem 0 0;
+        color: #5f7078;
+        font-size: 0.8rem;
+        line-height: 1.35;
+      }
+
+      .url-item {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.35rem;
+      }
+
+      .url {
+        display: block;
+        text-decoration: none;
+        border: 1px solid rgba(17, 79, 85, 0.2);
+        border-radius: 0.52rem;
+        background: rgba(17, 79, 85, 0.06);
+        color: #114b52;
+        font-family: "Consolas", "SFMono-Regular", Menlo, monospace;
+        font-size: 0.74rem;
+        padding: 0.36rem 0.42rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .url:hover {
+        background: rgba(17, 79, 85, 0.12);
+        border-color: rgba(17, 79, 85, 0.4);
+      }
+
+      .copy-btn {
+        border: 1px solid rgba(17, 79, 85, 0.28);
+        border-radius: 0.52rem;
+        background: #fff;
+        color: #24545a;
+        font-size: 0.74rem;
+        padding: 0.22rem 0.5rem;
+        cursor: pointer;
+      }
+
+      .copy-btn:hover {
+        border-color: rgba(17, 79, 85, 0.48);
+        background: rgba(17, 79, 85, 0.08);
+      }
+
+      .copy-btn:focus-visible {
+        outline: 2px solid rgba(30, 108, 116, 0.45);
         outline-offset: 1px;
       }
 
       .empty {
-        border: 1px dashed rgba(8, 95, 99, 0.32);
-        border-radius: 16px;
-        padding: 1.3rem 1rem;
-        background: rgba(255, 255, 255, 0.68);
-        color: var(--ink-muted);
+        margin-top: 0.9rem;
+        border: 1px dashed rgba(17, 79, 85, 0.35);
+        border-radius: 9px;
+        background: rgba(255, 255, 255, 0.66);
+        color: var(--ink-dim);
+        padding: 1rem;
+      }
+
+      .empty.is-hidden {
+        display: none;
+      }
+
+      @media (max-width: 980px) {
+        .toolbar {
+          grid-template-columns: 1fr;
+        }
+
+        .head {
+          display: none;
+        }
+
+        .row {
+          grid-template-columns: 1fr;
+          gap: 0.62rem;
+        }
       }
 
       @media (max-width: 700px) {
@@ -247,18 +354,11 @@
         }
 
         .hero {
-          padding: 1rem 1rem 0.9rem;
+          padding: 0.9rem;
         }
 
-        .card {
-          padding: 0.88rem;
-          grid-template-columns: 1fr;
-        }
-      }
-
-      @media (max-width: 980px) {
-        .card {
-          grid-template-columns: 1fr;
+        .row {
+          padding: 0.64rem;
         }
       }
 
@@ -269,10 +369,10 @@
         }
       }
 
-      @keyframes rise-in {
+      @keyframes lift-in {
         from {
           opacity: 0;
-          transform: translateY(12px);
+          transform: translateY(10px);
         }
         to {
           opacity: 1;
@@ -284,62 +384,196 @@
   <body>
     <main class="page">
       <header class="hero">
-        <span class="hero-label">Live Catalog</span>
+        <span class="hero-tag">Live Catalog</span>
         <h1>Web2API Recipes</h1>
         <p class="subtitle">
-          Available scraped APIs discovered from the <code>recipes/</code> directory.
-          Endpoints marked with <code>q</code> require a query parameter.
+          Browse APIs discovered from <code>recipes/</code>, filter quickly, then open or copy
+          ready URLs. Endpoints labeled <code>q</code> require query input.
         </p>
-        <div class="stats">
-          <span class="stat">{{ sites|length }} discovered site{% if sites|length != 1 %}s{% endif %}</span>
-          <span class="stat">Path pattern: /&lt;slug&gt;/&lt;endpoint&gt;</span>
+
+        <div class="toolbar">
+          <label>
+            <input
+              class="filter"
+              id="filterInput"
+              type="search"
+              placeholder="Filter by site, slug, endpoint, or description"
+              autocomplete="off"
+            />
+          </label>
+          <label class="toggle">
+            <input id="qOnlyToggle" type="checkbox" />
+            Show only endpoints requiring q
+          </label>
+        </div>
+
+        <div class="summary">
+          <span class="pill"><strong id="visibleSites">{{ sites|length }}</strong> visible sites</span>
+          <span class="pill"><strong id="visibleEndpoints">0</strong> visible endpoints</span>
+          <span class="pill">pattern /&lt;slug&gt;/&lt;endpoint&gt;</span>
         </div>
       </header>
 
-      <section class="cards">
-        {% if sites %}
+      {% if sites %}
+      <section class="catalog" id="catalog">
+        <div class="head" aria-hidden="true">
+          <span>Site</span>
+          <span>Endpoints</span>
+          <span>Ready URLs</span>
+        </div>
+
         {% for site in sites %}
-        <article class="card" style="--i: {{ loop.index0 }};">
-          <div class="site-meta">
-            <div class="card-head">
-              <h2 class="site-name">{{ site.name }}</h2>
-              <p class="slug">{{ site.slug }}</p>
-            </div>
+        <article
+          class="row"
+          style="--row-index: {{ loop.index0 }};"
+          data-site="{{ site.name|lower }} {{ site.slug|lower }} {{ site.description|default('', true)|lower }}"
+        >
+          <section class="site">
+            <h2>{{ site.name }}</h2>
+            <span class="slug">{{ site.slug }}</span>
             <p class="desc">{{ site.description }}</p>
-          </div>
-          <div class="block">
-            <p class="block-title">Endpoints</p>
-            <div class="chips">
-              {% for ep in site.endpoints %}
-              <span class="chip">
-                {{ ep.name }}
+          </section>
+
+          <section class="endpoints">
+            {% for ep in site.endpoints %}
+            <div
+              class="endpoint-item"
+              data-endpoint-text="{{ ep.name|lower }} {{ ep.description|default('', true)|lower }}"
+              data-requires-query="{% if ep.requires_query %}true{% else %}false{% endif %}"
+            >
+              <div class="endpoint-top">
+                <p class="ep-name">{{ ep.name }}</p>
                 {% if ep.requires_query %}
-                <span class="chip-query">q</span>
+                <span class="q-badge">q</span>
                 {% endif %}
-              </span>
-              {% endfor %}
-            </div>
-          </div>
-          <div class="block">
-            <p class="block-title">Try It</p>
-            <div class="links">
-              {% for ep in site.endpoints %}
-              {% if ep.requires_query %}
-              <a class="link" href="{{ ep.link }}?q=example&page=1">{{ ep.link }}?q=example&page=1</a>
-              {% else %}
-              <a class="link" href="{{ ep.link }}?page=1">{{ ep.link }}?page=1</a>
+              </div>
+              {% if ep.description %}
+              <p class="ep-desc">{{ ep.description }}</p>
               {% endif %}
-              {% endfor %}
             </div>
-          </div>
+            {% endfor %}
+          </section>
+
+          <section class="urls">
+            {% for ep in site.endpoints %}
+            {% if ep.requires_query %}
+            {% set endpoint_url = ep.link ~ '?q=example&page=1' %}
+            {% else %}
+            {% set endpoint_url = ep.link ~ '?page=1' %}
+            {% endif %}
+            <div
+              class="url-item"
+              data-endpoint-text="{{ ep.name|lower }} {{ ep.description|default('', true)|lower }}"
+              data-requires-query="{% if ep.requires_query %}true{% else %}false{% endif %}"
+            >
+              <a class="url" href="{{ endpoint_url }}">{{ endpoint_url }}</a>
+              <button class="copy-btn" type="button" data-url="{{ endpoint_url }}">copy</button>
+            </div>
+            {% endfor %}
+          </section>
         </article>
         {% endfor %}
-        {% else %}
-        <div class="empty">
-          No recipe APIs found. Add a folder under <code>recipes/</code> and restart the service.
-        </div>
-        {% endif %}
       </section>
+
+      <p class="empty is-hidden" id="noMatches">
+        No recipes match your current filters.
+      </p>
+      {% else %}
+      <div class="empty">
+        No recipe APIs found. Add a folder under <code>recipes/</code> and restart the service.
+      </div>
+      {% endif %}
     </main>
+
+    <script>
+      (() => {
+        const rows = Array.from(document.querySelectorAll(".row"));
+        if (rows.length === 0) {
+          return;
+        }
+
+        const filterInput = document.getElementById("filterInput");
+        const qOnlyToggle = document.getElementById("qOnlyToggle");
+        const visibleSites = document.getElementById("visibleSites");
+        const visibleEndpoints = document.getElementById("visibleEndpoints");
+        const noMatches = document.getElementById("noMatches");
+
+        const normalize = (value) => value.trim().toLowerCase();
+
+        const applyFilters = () => {
+          const term = normalize(filterInput.value || "");
+          const qOnly = qOnlyToggle.checked;
+
+          let shownSites = 0;
+          let shownEndpoints = 0;
+
+          rows.forEach((row) => {
+            const siteText = row.dataset.site || "";
+            const siteMatches = term === "" || siteText.includes(term);
+
+            const endpointItems = Array.from(row.querySelectorAll(".endpoint-item"));
+            const urlItems = Array.from(row.querySelectorAll(".url-item"));
+
+            let rowVisibleCount = 0;
+
+            endpointItems.forEach((endpointItem, index) => {
+              const endpointText = endpointItem.dataset.endpointText || "";
+              const requiresQuery = endpointItem.dataset.requiresQuery === "true";
+
+              const matchesToggle = !qOnly || requiresQuery;
+              const matchesTerm = term === "" || siteMatches || endpointText.includes(term);
+              const isVisible = matchesToggle && matchesTerm;
+
+              endpointItem.classList.toggle("is-hidden", !isVisible);
+              if (urlItems[index]) {
+                urlItems[index].classList.toggle("is-hidden", !isVisible);
+              }
+
+              if (isVisible) {
+                rowVisibleCount += 1;
+              }
+            });
+
+            const rowVisible = rowVisibleCount > 0;
+            row.classList.toggle("is-hidden", !rowVisible);
+
+            if (rowVisible) {
+              shownSites += 1;
+              shownEndpoints += rowVisibleCount;
+            }
+          });
+
+          visibleSites.textContent = String(shownSites);
+          visibleEndpoints.textContent = String(shownEndpoints);
+          noMatches.classList.toggle("is-hidden", shownSites > 0);
+        };
+
+        filterInput.addEventListener("input", applyFilters);
+        qOnlyToggle.addEventListener("change", applyFilters);
+
+        document.querySelectorAll(".copy-btn").forEach((button) => {
+          button.addEventListener("click", async () => {
+            const relative = button.dataset.url || "";
+            const absolute = `${window.location.origin}${relative}`;
+
+            try {
+              await navigator.clipboard.writeText(absolute);
+              const original = button.textContent;
+              button.textContent = "copied";
+              window.setTimeout(() => {
+                button.textContent = original;
+              }, 1100);
+            } catch (_error) {
+              button.textContent = "failed";
+              window.setTimeout(() => {
+                button.textContent = "copy";
+              }, 1100);
+            }
+          });
+        });
+
+        applyFilters();
+      })();
+    </script>
   </body>
 </html>
