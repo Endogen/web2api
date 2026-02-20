@@ -131,6 +131,47 @@
         gap: 0.45rem;
       }
 
+      .view-tabs {
+        margin-top: 0.9rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 0.24rem;
+        background: rgba(255, 255, 255, 0.84);
+      }
+
+      .view-tab {
+        border: 1px solid transparent;
+        border-radius: 999px;
+        background: transparent;
+        color: #33444c;
+        font-size: 0.82rem;
+        padding: 0.34rem 0.72rem;
+        cursor: pointer;
+      }
+
+      .view-tab.is-active {
+        border-color: rgba(17, 79, 85, 0.28);
+        color: var(--teal-900);
+        background: rgba(17, 79, 85, 0.14);
+      }
+
+      .view-tab:focus-visible {
+        outline: 2px solid rgba(30, 108, 116, 0.45);
+        outline-offset: 1px;
+      }
+
+      .view-panel {
+        display: none;
+        margin-top: 1rem;
+      }
+
+      .view-panel.is-active {
+        display: block;
+      }
+
       .pill {
         display: inline-flex;
         align-items: center;
@@ -148,7 +189,7 @@
       }
 
       .catalog {
-        margin-top: 1rem;
+        margin-top: 0;
       }
 
       .head {
@@ -330,7 +371,7 @@
       }
 
       .manager {
-        margin-top: 1.2rem;
+        margin-top: 0;
         border: 1px solid rgba(17, 79, 85, 0.2);
         border-radius: 10px;
         background: rgba(255, 255, 255, 0.86);
@@ -524,8 +565,8 @@
         <span class="hero-tag">Live Catalog</span>
         <h1>Web2API Recipes</h1>
         <p class="subtitle">
-          Browse installed API recipes, filter quickly, then open or copy ready URLs. Use the
-          repository section below to install and manage recipes. Endpoints labeled <code>q</code>
+          Browse installed API recipes, filter quickly, then open or copy ready URLs. Switch tabs
+          to install and manage recipes from the repository. Endpoints labeled <code>q</code>
           require query input.
         </p>
 
@@ -552,77 +593,116 @@
         </div>
       </header>
 
-      {% if sites %}
-      <section class="catalog" id="catalog">
-        <div class="head" aria-hidden="true">
-          <span>Site</span>
-          <span>Endpoints</span>
-          <span>Ready URLs</span>
-        </div>
-
-        {% for site in sites %}
-        <article
-          class="row"
-          style="--row-index: {{ loop.index0 }};"
-          data-site="{{ site.name|lower }} {{ site.slug|lower }} {{ site.description|default('', true)|lower }}"
+      <div class="view-tabs" role="tablist" aria-label="Recipe views">
+        <button
+          type="button"
+          id="tabInstalled"
+          class="view-tab is-active"
+          data-view-target="installed"
+          role="tab"
+          aria-selected="true"
+          aria-controls="installedPanel"
         >
-          <section class="site">
-            <h2>{{ site.name }}</h2>
-            <span class="slug">{{ site.slug }}</span>
-            <p class="desc">{{ site.description }}</p>
-          </section>
+          Installed APIs
+        </button>
+        <button
+          type="button"
+          id="tabRepository"
+          class="view-tab"
+          data-view-target="repository"
+          role="tab"
+          aria-selected="false"
+          aria-controls="repoManager"
+        >
+          Recipe Repository
+        </button>
+      </div>
 
-          <section class="endpoints">
-            {% for ep in site.endpoints %}
-            <div
-              class="endpoint-item"
-              data-endpoint-text="{{ ep.name|lower }} {{ ep.description|default('', true)|lower }}"
-              data-requires-query="{% if ep.requires_query %}true{% else %}false{% endif %}"
-            >
-              <div class="endpoint-top">
-                <p class="ep-name">{{ ep.name }}</p>
-                {% if ep.requires_query %}
-                <span class="q-badge">q</span>
+      <section
+        class="view-panel is-active"
+        id="installedPanel"
+        data-view-panel="installed"
+        role="tabpanel"
+        aria-labelledby="tabInstalled"
+      >
+        {% if sites %}
+        <section class="catalog" id="catalog">
+          <div class="head" aria-hidden="true">
+            <span>Site</span>
+            <span>Endpoints</span>
+            <span>Ready URLs</span>
+          </div>
+
+          {% for site in sites %}
+          <article
+            class="row"
+            style="--row-index: {{ loop.index0 }};"
+            data-site="{{ site.name|lower }} {{ site.slug|lower }} {{ site.description|default('', true)|lower }}"
+          >
+            <section class="site">
+              <h2>{{ site.name }}</h2>
+              <span class="slug">{{ site.slug }}</span>
+              <p class="desc">{{ site.description }}</p>
+            </section>
+
+            <section class="endpoints">
+              {% for ep in site.endpoints %}
+              <div
+                class="endpoint-item"
+                data-endpoint-text="{{ ep.name|lower }} {{ ep.description|default('', true)|lower }}"
+                data-requires-query="{% if ep.requires_query %}true{% else %}false{% endif %}"
+              >
+                <div class="endpoint-top">
+                  <p class="ep-name">{{ ep.name }}</p>
+                  {% if ep.requires_query %}
+                  <span class="q-badge">q</span>
+                  {% endif %}
+                </div>
+                {% if ep.description %}
+                <p class="ep-desc">{{ ep.description }}</p>
                 {% endif %}
               </div>
-              {% if ep.description %}
-              <p class="ep-desc">{{ ep.description }}</p>
-              {% endif %}
-            </div>
-            {% endfor %}
-          </section>
+              {% endfor %}
+            </section>
 
-          <section class="urls">
-            {% for ep in site.endpoints %}
-            {% if ep.requires_query %}
-            {% set endpoint_url = ep.link ~ '?q=example&page=1' %}
-            {% else %}
-            {% set endpoint_url = ep.link ~ '?page=1' %}
-            {% endif %}
-            <div
-              class="url-item"
-              data-endpoint-text="{{ ep.name|lower }} {{ ep.description|default('', true)|lower }}"
-              data-requires-query="{% if ep.requires_query %}true{% else %}false{% endif %}"
-            >
-              <a class="url" href="{{ endpoint_url }}">{{ endpoint_url }}</a>
-              <button class="copy-btn" type="button" data-url="{{ endpoint_url }}">copy</button>
-            </div>
-            {% endfor %}
-          </section>
-        </article>
-        {% endfor %}
+            <section class="urls">
+              {% for ep in site.endpoints %}
+              {% if ep.requires_query %}
+              {% set endpoint_url = ep.link ~ '?q=example&page=1' %}
+              {% else %}
+              {% set endpoint_url = ep.link ~ '?page=1' %}
+              {% endif %}
+              <div
+                class="url-item"
+                data-endpoint-text="{{ ep.name|lower }} {{ ep.description|default('', true)|lower }}"
+                data-requires-query="{% if ep.requires_query %}true{% else %}false{% endif %}"
+              >
+                <a class="url" href="{{ endpoint_url }}">{{ endpoint_url }}</a>
+                <button class="copy-btn" type="button" data-url="{{ endpoint_url }}">copy</button>
+              </div>
+              {% endfor %}
+            </section>
+          </article>
+          {% endfor %}
+        </section>
+
+        <p class="empty is-hidden" id="noMatches">
+          No recipes match your current filters.
+        </p>
+        {% else %}
+        <div class="empty">
+          No recipe APIs are installed yet. Open the Recipe Repository tab to install one.
+        </div>
+        {% endif %}
       </section>
 
-      <p class="empty is-hidden" id="noMatches">
-        No recipes match your current filters.
-      </p>
-      {% else %}
-      <div class="empty">
-        No recipe APIs are installed yet. Use the repository section below to install one.
-      </div>
-      {% endif %}
-
-      <section class="manager" id="repoManager">
+      <section
+        class="manager view-panel"
+        id="repoManager"
+        data-view-panel="repository"
+        role="tabpanel"
+        aria-labelledby="tabRepository"
+      >
         <div class="manager-top">
           <div>
             <h2>Recipe Repository</h2>
@@ -721,6 +801,46 @@
           });
 
           applyFilters();
+        }
+
+        const viewTabs = Array.from(document.querySelectorAll("[data-view-target]"));
+        const viewPanels = Array.from(document.querySelectorAll("[data-view-panel]"));
+        if (viewTabs.length > 0 && viewPanels.length > 0) {
+          const activateView = (target) => {
+            viewTabs.forEach((tab) => {
+              const active = (tab.dataset.viewTarget || "") === target;
+              tab.classList.toggle("is-active", active);
+              tab.setAttribute("aria-selected", active ? "true" : "false");
+              tab.tabIndex = active ? 0 : -1;
+            });
+            viewPanels.forEach((panel) => {
+              const active = (panel.dataset.viewPanel || "") === target;
+              panel.classList.toggle("is-active", active);
+            });
+          };
+
+          viewTabs.forEach((tab, index) => {
+            tab.addEventListener("click", () => {
+              activateView(tab.dataset.viewTarget || "installed");
+            });
+            tab.addEventListener("keydown", (event) => {
+              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+                return;
+              }
+              event.preventDefault();
+              const offset = event.key === "ArrowRight" ? 1 : -1;
+              const nextIndex = (index + offset + viewTabs.length) % viewTabs.length;
+              const nextTab = viewTabs[nextIndex];
+              if (!nextTab) {
+                return;
+              }
+              activateView(nextTab.dataset.viewTarget || "installed");
+              nextTab.focus();
+            });
+          });
+
+          const initialTab = viewTabs.find((tab) => tab.classList.contains("is-active")) || viewTabs[0];
+          activateView((initialTab && initialTab.dataset.viewTarget) || "installed");
         }
 
         const managerSource = document.getElementById("managerSource");
