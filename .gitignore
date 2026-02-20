@@ -16,3 +16,4 @@ htmlcov/
 *.cover
 .mypy_cache/
 .ralph/
+dist_release/
