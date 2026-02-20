@@ -1,26 +1,29 @@
-"""Unit tests for plugin manager helpers."""
+"""Unit tests for recipe manager helpers."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from web2api.plugin import parse_plugin_config
-from web2api.plugin_manager import (
-    DEFAULT_CATALOG_PATH,
+from web2api.recipe_manager import (
+    OFFICIAL_RECIPES_REPO_URL,
     build_install_commands,
     copy_recipe_into_recipes_dir,
+    default_catalog_source,
     default_recipes_dir,
     disable_recipe,
-    discover_plugin_entries,
+    discover_recipe_entries,
     enable_recipe,
-    find_plugin_entry,
+    find_recipe_entry,
     load_catalog,
     load_manifest,
-    record_plugin_install,
+    record_recipe_install,
     remove_manifest_record,
+    resolve_catalog_recipes,
 )
 
 
@@ -49,7 +52,7 @@ def _write_recipe(recipe_dir: Path) -> None:
     )
 
 
-def test_discover_plugin_entries_includes_enablement_and_plugin(tmp_path: Path) -> None:
+def test_discover_recipe_entries_includes_enablement_and_plugin(tmp_path: Path) -> None:
     recipes_dir = tmp_path / "recipes"
     alpha_dir = recipes_dir / "alpha"
     _write_recipe(alpha_dir)
@@ -65,16 +68,16 @@ def test_discover_plugin_entries_includes_enablement_and_plugin(tmp_path: Path) 
     )
     disable_recipe(alpha_dir)
 
-    entries = discover_plugin_entries(recipes_dir)
-    alpha = find_plugin_entry(entries, "alpha")
+    entries = discover_recipe_entries(recipes_dir)
+    alpha = find_recipe_entry(entries, "alpha")
     assert alpha is not None
     assert alpha.enabled is False
     assert alpha.plugin is not None
     assert alpha.plugin.requires_env == ["ALPHA_TOKEN"]
 
     enable_recipe(alpha_dir)
-    entries_after_enable = discover_plugin_entries(recipes_dir)
-    alpha_enabled = find_plugin_entry(entries_after_enable, "alpha")
+    entries_after_enable = discover_recipe_entries(recipes_dir)
+    alpha_enabled = find_recipe_entry(entries_after_enable, "alpha")
     assert alpha_enabled is not None
     assert alpha_enabled.enabled is True
 
@@ -112,7 +115,7 @@ def test_manifest_record_roundtrip(tmp_path: Path) -> None:
     recipes_dir = tmp_path / "recipes"
     recipes_dir.mkdir(parents=True)
 
-    record_plugin_install(
+    record_recipe_install(
         recipes_dir,
         slug="alpha",
         folder="alpha",
@@ -125,13 +128,13 @@ def test_manifest_record_roundtrip(tmp_path: Path) -> None:
 
     manifest = load_manifest(recipes_dir)
     assert manifest["version"] == 1
-    assert manifest["plugins"]["alpha"]["source_type"] == "local"
-    assert manifest["plugins"]["alpha"]["source_subdir"] == "recipes/alpha"
-    assert manifest["plugins"]["alpha"]["trusted"] is True
+    assert manifest["recipes"]["alpha"]["source_type"] == "local"
+    assert manifest["recipes"]["alpha"]["source_subdir"] == "recipes/alpha"
+    assert manifest["recipes"]["alpha"]["trusted"] is True
 
     removed = remove_manifest_record(recipes_dir, "alpha")
     assert removed is True
-    assert load_manifest(recipes_dir)["plugins"] == {}
+    assert load_manifest(recipes_dir)["recipes"] == {}
 
 
 def test_copy_recipe_into_recipes_dir_uses_slug_folder(tmp_path: Path) -> None:
@@ -153,7 +156,7 @@ def test_copy_recipe_into_recipes_dir_uses_slug_folder(tmp_path: Path) -> None:
 def test_discovery_entry_includes_manifest_record(tmp_path: Path) -> None:
     recipes_dir = tmp_path / "recipes"
     _write_recipe(recipes_dir / "alpha")
-    record_plugin_install(
+    record_recipe_install(
         recipes_dir,
         slug="alpha",
         folder="alpha",
@@ -163,20 +166,20 @@ def test_discovery_entry_includes_manifest_record(tmp_path: Path) -> None:
         trusted=False,
     )
 
-    entries = discover_plugin_entries(recipes_dir)
-    alpha = find_plugin_entry(entries, "alpha")
+    entries = discover_recipe_entries(recipes_dir)
+    alpha = find_recipe_entry(entries, "alpha")
     assert alpha is not None
     assert alpha.manifest_record is not None
     assert alpha.manifest_record["source_type"] == "git"
     assert alpha.manifest_record["trusted"] is False
 
 
-def test_load_catalog_reads_plugin_entries(tmp_path: Path) -> None:
+def test_load_catalog_reads_recipe_entries(tmp_path: Path) -> None:
     catalog_file = tmp_path / "catalog.yaml"
     catalog_file.write_text(
         yaml.safe_dump(
             {
-                "plugins": {
+                "recipes": {
                     "demo": {
                         "source": "./demo",
                         "trusted": True,
@@ -194,6 +197,35 @@ def test_load_catalog_reads_plugin_entries(tmp_path: Path) -> None:
     assert catalog["demo"]["trusted"] is True
 
 
-def test_default_paths_exist() -> None:
-    assert default_recipes_dir().exists()
-    assert DEFAULT_CATALOG_PATH.exists()
+def test_default_paths_exist(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB2API_RECIPE_CATALOG_SOURCE", raising=False)
+    recipes_path = default_recipes_dir()
+    assert recipes_path.name == "recipes"
+    assert recipes_path.parent.name == ".web2api"
+    assert default_catalog_source() == OFFICIAL_RECIPES_REPO_URL
+
+
+def test_resolve_catalog_recipes_from_local_file(tmp_path: Path) -> None:
+    source_recipe = tmp_path / "demo-recipe"
+    _write_recipe(source_recipe)
+
+    catalog_file = tmp_path / "catalog.yaml"
+    catalog_file.write_text(
+        yaml.safe_dump(
+            {
+                "recipes": {
+                    "demo": {
+                        "source": "./demo-recipe",
+                        "trusted": True,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    specs = resolve_catalog_recipes(catalog_source=str(catalog_file))
+    assert "demo" in specs
+    assert specs["demo"].slug == "demo"
+    assert specs["demo"].source == str(source_recipe.resolve())
+    assert specs["demo"].trusted is True

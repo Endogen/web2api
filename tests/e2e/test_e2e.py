@@ -118,6 +118,11 @@ def _assert_live_result_or_skip(response: ApiResponse, *, endpoint: str) -> None
     pytest.fail(f"{endpoint} failed with {response.error.code}: {response.error.message}")
 
 
+def _should_skip_for_network_issue(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in LIVE_ERROR_MARKERS)
+
+
 @pytest.fixture
 def dockerized_web2api() -> Iterator[str]:
     compose_cmd = _docker_compose_base_cmd()
@@ -149,6 +154,28 @@ def dockerized_web2api() -> Iterator[str]:
 
 def test_docker_e2e_hackernews_flow(dockerized_web2api: str) -> None:
     with httpx.Client(base_url=dockerized_web2api, timeout=30.0) as client:
+        catalog_response = client.get("/api/recipes/manage")
+        if catalog_response.status_code != 200:
+            if _should_skip_for_network_issue(catalog_response.text):
+                pytest.skip(f"Catalog unavailable due to network issues: {catalog_response.text}")
+            assert catalog_response.status_code == 200, catalog_response.text
+        catalog_payload = catalog_response.json()
+        catalog_error = str(catalog_payload.get("catalog_error") or "")
+        if catalog_error and _should_skip_for_network_issue(catalog_error):
+            pytest.skip(f"Catalog unavailable due to network issues: {catalog_error}")
+        catalog_entries = catalog_payload.get("catalog", [])
+        assert isinstance(catalog_entries, list)
+
+        hackernews_entry = next(
+            (entry for entry in catalog_entries if entry.get("name") == "hackernews"),
+            None,
+        )
+        assert hackernews_entry is not None, "hackernews entry missing from catalog"
+
+        if not hackernews_entry.get("installed"):
+            install_response = client.post("/api/recipes/manage/install/hackernews")
+            assert install_response.status_code == 200, install_response.text
+
         read_raw = client.get("/hackernews/read")
         assert read_raw.status_code == 200, read_raw.text
         read_response = ApiResponse.model_validate(read_raw.json())

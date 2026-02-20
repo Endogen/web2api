@@ -6,6 +6,8 @@ services:
     restart: unless-stopped
     ports:
       - "8010:8000"
+    volumes:
+      - ./data/recipes:/data/recipes
     environment:
       POOL_MAX_CONTEXTS: "${POOL_MAX_CONTEXTS:-5}"
       POOL_CONTEXT_TTL: "${POOL_CONTEXT_TTL:-50}"
@@ -17,7 +19,10 @@ services:
       CACHE_TTL_SECONDS: "${CACHE_TTL_SECONDS:-30}"
       CACHE_STALE_TTL_SECONDS: "${CACHE_STALE_TTL_SECONDS:-120}"
       CACHE_MAX_ENTRIES: "${CACHE_MAX_ENTRIES:-500}"
-      RECIPES_DIR: "${RECIPES_DIR:-./recipes}"
+      RECIPES_DIR: "${RECIPES_DIR:-/data/recipes}"
+      WEB2API_RECIPE_CATALOG_SOURCE: "${WEB2API_RECIPE_CATALOG_SOURCE:-https://github.com/Endogen/web2api-recipes.git}"
+      WEB2API_RECIPE_CATALOG_REF: "${WEB2API_RECIPE_CATALOG_REF:-}"
+      WEB2API_RECIPE_CATALOG_PATH: "${WEB2API_RECIPE_CATALOG_PATH:-}"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       BIRD_AUTH_TOKEN: "${BIRD_AUTH_TOKEN:-}"
       BIRD_CT0: "${BIRD_CT0:-}"

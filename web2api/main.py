@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -12,7 +13,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from fastapi import FastAPI, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
@@ -27,8 +28,14 @@ from web2api.logging_utils import (
     set_request_id,
 )
 from web2api.plugin import build_plugin_payload
-from web2api.plugin_manager import default_recipes_dir as default_plugin_recipes_dir
 from web2api.pool import BrowserPool
+from web2api.recipe_admin_api import register_recipe_admin_routes
+from web2api.recipe_manager import (
+    default_catalog_path,
+    default_catalog_ref,
+    default_catalog_source,
+    default_recipes_dir,
+)
 from web2api.registry import Recipe, RecipeRegistry
 from web2api.schemas import (
     ApiResponse,
@@ -39,7 +46,6 @@ from web2api.schemas import (
     SiteInfo,
 )
 
-RouteEndpoint = Callable[..., Awaitable[JSONResponse]]
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 logger = logging.getLogger(__name__)
 _EXTRA_PARAM_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
@@ -49,7 +55,7 @@ APP_VERSION = __version__
 
 def _default_recipes_dir() -> Path:
     """Return the default recipes directory path."""
-    return default_plugin_recipes_dir()
+    return default_recipes_dir()
 
 
 def _env_bool(name: str, *, default: bool) -> bool:
@@ -172,81 +178,68 @@ def _with_cached_metadata(response: ApiResponse) -> ApiResponse:
     return cached_response
 
 
-def _create_recipe_handler(recipe: Recipe, endpoint_name: str) -> RouteEndpoint:
-    """Create a route handler bound to a specific recipe endpoint."""
-
-    async def handler(
-        request: Request,
-        page: int = Query(default=1, ge=1),
-        q: str | None = Query(default=None),
-    ) -> JSONResponse:
-        extra_params, extra_error = _collect_extra_params(request)
-        if extra_error is not None:
-            response = _build_error_response(
-                recipe=recipe,
-                endpoint=endpoint_name,
-                current_page=page,
-                query=q,
-                code="INVALID_PARAMS",
-                message=extra_error,
-            )
-            return JSONResponse(
-                content=response.model_dump(mode="json"),
-                status_code=_status_code_for_error(response.error),
-            )
-
-        async def _run_scrape() -> ApiResponse:
-            return await scrape(
-                pool=request.app.state.pool,
-                recipe=recipe,
-                endpoint=endpoint_name,
-                page=page,
-                query=q,
-                extra_params=extra_params,
-                scrape_timeout=request.app.state.scrape_timeout,
-            )
-
-        response_cache: ResponseCache | None = getattr(request.app.state, "response_cache", None)
-        cache_key: CacheKey | None = None
-        if response_cache is not None:
-            cache_key = _cache_key_for_request(
-                slug=recipe.config.slug,
-                endpoint=endpoint_name,
-                page=page,
-                query=q,
-                extra_params=extra_params,
-            )
-            cache_lookup = await response_cache.get(cache_key)
-            if cache_lookup.response is not None:
-                if cache_lookup.state == "stale":
-                    await response_cache.trigger_refresh(cache_key, _run_scrape)
-                cached_response = _with_cached_metadata(cache_lookup.response)
-                return JSONResponse(
-                    content=cached_response.model_dump(mode="json"),
-                    status_code=_status_code_for_error(cached_response.error),
-                )
-
-        response = await _run_scrape()
-        if response_cache is not None and cache_key is not None:
-            await response_cache.set(cache_key, response)
+async def _serve_recipe_endpoint(
+    request: Request,
+    *,
+    recipe: Recipe,
+    endpoint_name: str,
+    page: int,
+    q: str | None,
+) -> JSONResponse:
+    """Serve a recipe endpoint request with cache support."""
+    extra_params, extra_error = _collect_extra_params(request)
+    if extra_error is not None:
+        response = _build_error_response(
+            recipe=recipe,
+            endpoint=endpoint_name,
+            current_page=page,
+            query=q,
+            code="INVALID_PARAMS",
+            message=extra_error,
+        )
         return JSONResponse(
             content=response.model_dump(mode="json"),
             status_code=_status_code_for_error(response.error),
         )
 
-    return handler
+    async def _run_scrape() -> ApiResponse:
+        return await scrape(
+            pool=request.app.state.pool,
+            recipe=recipe,
+            endpoint=endpoint_name,
+            page=page,
+            query=q,
+            extra_params=extra_params,
+            scrape_timeout=request.app.state.scrape_timeout,
+        )
 
-
-def _register_recipe_routes(app: FastAPI, registry: RecipeRegistry) -> None:
-    """Register per-recipe endpoint routes on the FastAPI app."""
-    for recipe in registry.list_all():
-        for endpoint_name in recipe.config.endpoints:
-            app.add_api_route(
-                path=f"/{recipe.config.slug}/{endpoint_name}",
-                endpoint=_create_recipe_handler(recipe, endpoint_name),
-                methods=["GET"],
-                name=f"{recipe.config.slug}_{endpoint_name}",
+    response_cache: ResponseCache | None = getattr(request.app.state, "response_cache", None)
+    cache_key: CacheKey | None = None
+    if response_cache is not None:
+        cache_key = _cache_key_for_request(
+            slug=recipe.config.slug,
+            endpoint=endpoint_name,
+            page=page,
+            query=q,
+            extra_params=extra_params,
+        )
+        cache_lookup = await response_cache.get(cache_key)
+        if cache_lookup.response is not None:
+            if cache_lookup.state == "stale":
+                await response_cache.trigger_refresh(cache_key, _run_scrape)
+            cached_response = _with_cached_metadata(cache_lookup.response)
+            return JSONResponse(
+                content=cached_response.model_dump(mode="json"),
+                status_code=_status_code_for_error(cached_response.error),
             )
+
+    response = await _run_scrape()
+    if response_cache is not None and cache_key is not None:
+        await response_cache.set(cache_key, response)
+    return JSONResponse(
+        content=response.model_dump(mode="json"),
+        status_code=_status_code_for_error(response.error),
+    )
 
 
 def create_app(
@@ -271,18 +264,23 @@ def create_app(
         if scrape_timeout is not None
         else float(os.environ.get("SCRAPE_TIMEOUT", "30"))
     )
+    enforce_plugin_compatibility = _env_bool(
+        "PLUGIN_ENFORCE_COMPATIBILITY",
+        default=False,
+    )
     recipe_registry = registry or RecipeRegistry(
         app_version=APP_VERSION,
-        enforce_plugin_compatibility=_env_bool(
-            "PLUGIN_ENFORCE_COMPATIBILITY",
-            default=False,
-        ),
+        enforce_plugin_compatibility=enforce_plugin_compatibility,
     )
     effective_recipes_dir = recipes_dir
     if effective_recipes_dir is None:
         env_recipes = os.environ.get("RECIPES_DIR")
         effective_recipes_dir = Path(env_recipes) if env_recipes else _default_recipes_dir()
     recipe_registry.discover(effective_recipes_dir)
+
+    catalog_source_value = default_catalog_source()
+    catalog_ref_value = default_catalog_ref()
+    catalog_path_value = default_catalog_path()
     cache_enabled = _env_bool("CACHE_ENABLED", default=True)
     active_response_cache = response_cache
     if active_response_cache is None and cache_enabled:
@@ -297,8 +295,14 @@ def create_app(
         await browser_pool.start()
         app.state.pool = browser_pool
         app.state.registry = recipe_registry
+        app.state.recipes_dir = effective_recipes_dir
+        app.state.enforce_plugin_compatibility = enforce_plugin_compatibility
         app.state.scrape_timeout = effective_scrape_timeout
         app.state.response_cache = active_response_cache
+        app.state.catalog_source = catalog_source_value
+        app.state.catalog_ref = catalog_ref_value
+        app.state.catalog_path = catalog_path_value
+        app.state.recipe_admin_lock = asyncio.Lock()
         try:
             yield
         finally:
@@ -359,12 +363,15 @@ def create_app(
             reset_request_id(token)
 
     @app.get("/api/sites")
-    async def list_sites() -> list[dict[str, Any]]:
+    async def list_sites(request: Request) -> list[dict[str, Any]]:
         """Return metadata for all discovered recipe sites."""
-        return [_site_payload(recipe) for recipe in recipe_registry.list_all()]
+        registry_state: RecipeRegistry = request.app.state.registry
+        return [_site_payload(recipe) for recipe in registry_state.list_all()]
+
+    register_recipe_admin_routes(app, app_version=APP_VERSION)
 
     @app.get("/health")
-    async def health() -> JSONResponse:
+    async def health(request: Request) -> JSONResponse:
         """Return service and browser pool health status."""
         pool_health = browser_pool.health
         cache_health: dict[str, int | float | bool]
@@ -372,6 +379,7 @@ def create_app(
             cache_health = {"enabled": False}
         else:
             cache_health = await active_response_cache.stats()
+        registry_state: RecipeRegistry = request.app.state.registry
 
         if not pool_health["browser_connected"]:
             return JSONResponse(
@@ -379,7 +387,7 @@ def create_app(
                     "status": "degraded",
                     "pool": pool_health,
                     "cache": cache_health,
-                    "recipes": recipe_registry.count,
+                    "recipes": registry_state.count,
                 },
                 status_code=503,
             )
@@ -388,23 +396,41 @@ def create_app(
                 "status": "ok",
                 "pool": pool_health,
                 "cache": cache_health,
-                "recipes": recipe_registry.count,
+                "recipes": registry_state.count,
             },
         )
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
         """Render an index page listing all discovered recipe APIs."""
-        sites = [_site_payload(recipe) for recipe in recipe_registry.list_all()]
+        registry_state: RecipeRegistry = request.app.state.registry
+        sites = [_site_payload(recipe) for recipe in registry_state.list_all()]
         return TEMPLATES.TemplateResponse(
             request=request,
             name="index.html",
             context={"sites": sites},
         )
 
-    # Register dynamic recipe routes after framework routes so static endpoints
-    # keep precedence even if a recipe path shape overlaps.
-    _register_recipe_routes(app, recipe_registry)
+    @app.get("/{slug}/{endpoint}")
+    async def recipe_endpoint(
+        request: Request,
+        slug: str,
+        endpoint: str,
+        page: int = Query(default=1, ge=1),
+        q: str | None = Query(default=None),
+    ) -> JSONResponse:
+        """Serve recipe endpoints using the live in-memory registry."""
+        registry_state: RecipeRegistry = request.app.state.registry
+        recipe = registry_state.get(slug)
+        if recipe is None or endpoint not in recipe.config.endpoints:
+            raise HTTPException(status_code=404, detail="Not Found")
+        return await _serve_recipe_endpoint(
+            request,
+            recipe=recipe,
+            endpoint_name=endpoint,
+            page=page,
+            q=q,
+        )
 
     return app
 

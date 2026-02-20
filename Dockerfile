@@ -18,7 +18,7 @@ COPY web2api/ ./web2api/
 RUN pip install --no-cache-dir . \
     && playwright install --with-deps chromium
 
-COPY recipes/ ./recipes/
+RUN mkdir -p /data/recipes
 
 EXPOSE 8000
 

@@ -1,4 +1,4 @@
-"""Plugin listing, install/uninstall, and dependency management helpers."""
+"""Recipe listing, install/uninstall, and dependency metadata helpers."""
 
 from __future__ import annotations
 
@@ -25,23 +25,18 @@ from web2api.plugin import PluginConfig, build_plugin_payload, parse_plugin_conf
 logger = logging.getLogger(__name__)
 
 DISABLED_MARKER = ".disabled"
-MANIFEST_FILENAME = ".web2api_plugins.json"
-_PACKAGE_DIR = Path(__file__).resolve().parent
-_PROJECT_ROOT = _PACKAGE_DIR.parent
-_BUNDLED_ROOT = _PACKAGE_DIR / "bundled"
-_PROJECT_RECIPES_DIR = _PROJECT_ROOT / "recipes"
-_BUNDLED_RECIPES_DIR = _BUNDLED_ROOT / "recipes"
-_PROJECT_CATALOG_PATH = _PROJECT_ROOT / "plugins" / "catalog.yaml"
-_BUNDLED_CATALOG_PATH = _BUNDLED_ROOT / "plugins" / "catalog.yaml"
-DEFAULT_CATALOG_PATH = (
-    _PROJECT_CATALOG_PATH if _PROJECT_CATALOG_PATH.exists() else _BUNDLED_CATALOG_PATH
-)
+MANIFEST_FILENAME = ".web2api_recipes.json"
+OFFICIAL_RECIPES_REPO_URL = "https://github.com/Endogen/web2api-recipes.git"
+DEFAULT_RECIPES_HOME = Path.home() / ".web2api" / "recipes"
+CATALOG_SOURCE_ENV = "WEB2API_RECIPE_CATALOG_SOURCE"
+CATALOG_REF_ENV = "WEB2API_RECIPE_CATALOG_REF"
+CATALOG_PATH_ENV = "WEB2API_RECIPE_CATALOG_PATH"
 SourceType = Literal["local", "git", "catalog"]
 
 
 @dataclass(slots=True)
-class PluginEntry:
-    """A recipe folder with optional plugin metadata."""
+class RecipeEntry:
+    """A recipe folder with optional dependency metadata."""
 
     slug: str
     folder: str
@@ -53,13 +48,59 @@ class PluginEntry:
     manifest_record: dict[str, Any] | None = None
 
 
+@dataclass(slots=True)
+class CatalogRecipeSpec:
+    """Install-ready recipe details resolved from catalog source."""
+
+    name: str
+    slug: str
+    source: str
+    source_ref: str | None
+    source_subdir: str | None
+    description: str | None
+    trusted: bool | None
+
+
+@dataclass(slots=True)
+class ManagedRecipeSource:
+    """Validated recipe source details loaded from a manifest record."""
+
+    source: str
+    source_ref: str | None
+    source_subdir: str | None
+    trusted: bool
+    source_type: SourceType | None
+
+
 def default_recipes_dir() -> Path:
     """Return default recipes directory path."""
-    if _PROJECT_RECIPES_DIR.exists():
-        return _PROJECT_RECIPES_DIR
-    if _BUNDLED_RECIPES_DIR.exists():
-        return _BUNDLED_RECIPES_DIR
-    return _PROJECT_RECIPES_DIR
+    return DEFAULT_RECIPES_HOME
+
+
+def default_catalog_source() -> str:
+    """Return catalog source URL/path used for repo browsing."""
+    configured = os.environ.get(CATALOG_SOURCE_ENV)
+    if configured is not None and configured.strip():
+        return configured.strip()
+    return OFFICIAL_RECIPES_REPO_URL
+
+
+def default_catalog_ref() -> str | None:
+    """Return optional source ref used for catalog source checkout."""
+    raw = os.environ.get(CATALOG_REF_ENV)
+    if raw is None:
+        return None
+    value = raw.strip()
+    return value or None
+
+
+def default_catalog_path() -> str:
+    """Return catalog file path inside the catalog source."""
+    raw = os.environ.get(CATALOG_PATH_ENV)
+    if raw is None:
+        return "catalog.yaml"
+    value = raw.strip()
+    return value or "catalog.yaml"
 
 
 def resolve_recipes_dir(recipes_dir: Path | None) -> Path:
@@ -73,16 +114,16 @@ def resolve_recipes_dir(recipes_dir: Path | None) -> Path:
 
 
 def manifest_path(recipes_dir: Path) -> Path:
-    """Return the path to the plugin install-state manifest."""
+    """Return the path to the recipe install-state manifest."""
     return recipes_dir / MANIFEST_FILENAME
 
 
 def _empty_manifest() -> dict[str, Any]:
-    return {"version": 1, "plugins": {}}
+    return {"version": 1, "recipes": {}}
 
 
 def load_manifest(recipes_dir: Path) -> dict[str, Any]:
-    """Load plugin install-state manifest from recipes directory."""
+    """Load recipe install-state manifest from recipes directory."""
     path = manifest_path(recipes_dir)
     if not path.exists():
         return _empty_manifest()
@@ -90,26 +131,26 @@ def load_manifest(recipes_dir: Path) -> dict[str, Any]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        logger.warning("Ignoring invalid plugin manifest at %s", path)
+        logger.warning("Ignoring invalid recipe manifest at %s", path)
         return _empty_manifest()
 
     if not isinstance(raw, dict):
-        logger.warning("Ignoring malformed plugin manifest at %s", path)
+        logger.warning("Ignoring malformed recipe manifest at %s", path)
         return _empty_manifest()
 
-    plugins = raw.get("plugins")
-    if not isinstance(plugins, dict):
-        logger.warning("Ignoring plugin manifest without 'plugins' mapping at %s", path)
+    recipes = raw.get("recipes")
+    if not isinstance(recipes, dict):
+        logger.warning("Ignoring recipe manifest without 'recipes' mapping at %s", path)
         return _empty_manifest()
 
     version = raw.get("version")
     if not isinstance(version, int):
         version = 1
-    return {"version": version, "plugins": plugins}
+    return {"version": version, "recipes": recipes}
 
 
 def save_manifest(recipes_dir: Path, manifest: dict[str, Any]) -> None:
-    """Write plugin install-state manifest."""
+    """Write recipe install-state manifest."""
     recipes_dir.mkdir(parents=True, exist_ok=True)
     path = manifest_path(recipes_dir)
     path.write_text(
@@ -120,14 +161,117 @@ def save_manifest(recipes_dir: Path, manifest: dict[str, Any]) -> None:
 
 def get_manifest_record(manifest: dict[str, Any], slug: str) -> dict[str, Any] | None:
     """Return manifest record for a slug if present."""
-    plugins = manifest.get("plugins")
-    if not isinstance(plugins, dict):
+    recipes = manifest.get("recipes")
+    if not isinstance(recipes, dict):
         return None
-    record = plugins.get(slug)
+    record = recipes.get(slug)
     return record if isinstance(record, dict) else None
 
 
-def record_plugin_install(
+def source_type_from_manifest_record(record: dict[str, Any]) -> SourceType | None:
+    """Return a normalized source type from manifest record."""
+    value = record.get("source_type")
+    if value in {"local", "git", "catalog"}:
+        return value
+    return None
+
+
+def entry_is_trusted(entry_record: dict[str, Any] | None) -> bool:
+    """Return trust flag from manifest record; defaults to trusted."""
+    if isinstance(entry_record, dict) and isinstance(entry_record.get("trusted"), bool):
+        return bool(entry_record["trusted"])
+    return True
+
+
+def recipe_origin(source_type: str | None) -> str:
+    """Return normalized recipe origin from source type."""
+    if isinstance(source_type, str) and source_type in {"catalog", "git", "local"}:
+        return source_type
+    return "unmanaged"
+
+
+def resolve_recipe_folder(
+    *,
+    slug: str,
+    entry: RecipeEntry | None,
+    manifest_record: dict[str, Any] | None,
+) -> str:
+    """Resolve recipe folder name for uninstall operations."""
+    if entry is not None:
+        return entry.folder
+    if isinstance(manifest_record, dict):
+        return str(manifest_record.get("folder") or slug)
+    return slug
+
+
+def resolve_managed_recipe_source(
+    manifest_record: dict[str, Any],
+    *,
+    slug: str,
+) -> ManagedRecipeSource:
+    """Validate and normalize managed source fields from manifest record."""
+    source_raw = manifest_record.get("source")
+    if not isinstance(source_raw, str) or not source_raw.strip():
+        raise ValueError(f"recipe '{slug}' has no source record")
+    source = source_raw.strip()
+
+    source_ref = None
+    if isinstance(manifest_record.get("source_ref"), str):
+        source_ref = str(manifest_record["source_ref"])
+
+    source_subdir = None
+    if isinstance(manifest_record.get("source_subdir"), str):
+        source_subdir = str(manifest_record["source_subdir"])
+
+    return ManagedRecipeSource(
+        source=source,
+        source_ref=source_ref,
+        source_subdir=source_subdir,
+        trusted=entry_is_trusted(manifest_record),
+        source_type=source_type_from_manifest_record(manifest_record),
+    )
+
+
+def build_entry_payload(entry: RecipeEntry, *, app_version: str) -> dict[str, Any]:
+    """Serialize recipe entry metadata for CLI/API output."""
+    metadata_payload = None
+    if entry.plugin is not None:
+        metadata_payload = build_plugin_payload(
+            entry.plugin,
+            current_web2api_version=app_version,
+        )
+
+    source = None
+    source_type = None
+    managed = False
+    trusted = True
+    if isinstance(entry.manifest_record, dict):
+        managed = True
+        trusted = entry_is_trusted(entry.manifest_record)
+        source_raw = entry.manifest_record.get("source")
+        source_type_raw = entry.manifest_record.get("source_type")
+        if source_raw is not None:
+            source = str(source_raw)
+        if source_type_raw is not None:
+            source_type = str(source_type_raw)
+
+    return {
+        "slug": entry.slug,
+        "folder": entry.folder,
+        "enabled": entry.enabled,
+        "has_recipe": entry.has_recipe,
+        "managed": managed,
+        "trusted": trusted,
+        "source_type": source_type,
+        "source": source,
+        "origin": recipe_origin(source_type),
+        "error": entry.error,
+        "plugin": metadata_payload,
+        "path": str(entry.path),
+    }
+
+
+def record_recipe_install(
     recipes_dir: Path,
     *,
     slug: str,
@@ -138,10 +282,10 @@ def record_plugin_install(
     source_subdir: str | None = None,
     trusted: bool,
 ) -> dict[str, Any]:
-    """Upsert an installed-plugin record in manifest."""
+    """Upsert an installed recipe record in manifest."""
     manifest = load_manifest(recipes_dir)
-    plugins = manifest["plugins"]
-    assert isinstance(plugins, dict)
+    recipes = manifest["recipes"]
+    assert isinstance(recipes, dict)
 
     record = {
         "folder": folder,
@@ -152,25 +296,25 @@ def record_plugin_install(
         "trusted": trusted,
         "installed_at": datetime.now(UTC).isoformat(),
     }
-    plugins[slug] = record
+    recipes[slug] = record
     save_manifest(recipes_dir, manifest)
     return record
 
 
 def remove_manifest_record(recipes_dir: Path, slug: str) -> bool:
-    """Delete a plugin record from manifest. Returns True if removed."""
+    """Delete a recipe record from manifest. Returns True if removed."""
     manifest = load_manifest(recipes_dir)
-    plugins = manifest["plugins"]
-    assert isinstance(plugins, dict)
-    if slug not in plugins:
+    recipes = manifest["recipes"]
+    assert isinstance(recipes, dict)
+    if slug not in recipes:
         return False
-    del plugins[slug]
+    del recipes[slug]
     save_manifest(recipes_dir, manifest)
     return True
 
 
 def load_catalog(catalog_file: Path) -> dict[str, dict[str, Any]]:
-    """Load plugin catalog metadata from YAML file."""
+    """Load recipe catalog metadata from YAML file."""
     if not catalog_file.exists():
         return {}
 
@@ -180,32 +324,121 @@ def load_catalog(catalog_file: Path) -> dict[str, dict[str, Any]]:
     if not isinstance(raw_data, dict):
         raise ValueError(f"{catalog_file} must contain a YAML mapping")
 
-    plugins = raw_data.get("plugins")
-    if plugins is None:
+    recipes = raw_data.get("recipes")
+    if recipes is None:
         return {}
-    if not isinstance(plugins, dict):
-        raise ValueError(f"{catalog_file} field 'plugins' must be a mapping")
+    if not isinstance(recipes, dict):
+        raise ValueError(f"{catalog_file} field 'recipes' must be a mapping")
 
     catalog: dict[str, dict[str, Any]] = {}
-    for raw_name, raw_entry in plugins.items():
+    for raw_name, raw_entry in recipes.items():
         name = str(raw_name).strip()
         if not name:
             continue
         if not isinstance(raw_entry, dict):
-            raise ValueError(f"{catalog_file} plugin '{name}' must be a mapping")
+            raise ValueError(f"{catalog_file} recipe '{name}' must be a mapping")
         source = raw_entry.get("source")
         if not isinstance(source, str) or not source.strip():
-            raise ValueError(f"{catalog_file} plugin '{name}' requires a non-empty string source")
+            raise ValueError(f"{catalog_file} recipe '{name}' requires a non-empty string source")
 
         entry = {
             "source": source.strip(),
             "ref": raw_entry.get("ref"),
             "subdir": raw_entry.get("subdir"),
+            "slug": raw_entry.get("slug"),
             "description": raw_entry.get("description"),
             "trusted": raw_entry.get("trusted"),
         }
         catalog[name] = entry
     return catalog
+
+
+def _looks_like_remote_source(value: str) -> bool:
+    return "://" in value or value.startswith("git@")
+
+
+def _resolve_local_catalog_source(raw_source: str, catalog_file: Path) -> str:
+    candidate = Path(raw_source).expanduser()
+    if _looks_like_remote_source(raw_source):
+        return raw_source
+    if candidate.is_absolute():
+        return str(candidate)
+    return str((catalog_file.parent / candidate).resolve())
+
+
+def _optional_nonempty_string(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def resolve_catalog_recipes(
+    *,
+    catalog_source: str | None = None,
+    catalog_ref: str | None = None,
+    catalog_path: str | None = None,
+) -> dict[str, CatalogRecipeSpec]:
+    """Resolve install-ready recipe specs from catalog source."""
+    source_value = catalog_source or default_catalog_source()
+    ref_value = catalog_ref if catalog_ref is not None else default_catalog_ref()
+    path_value = catalog_path or default_catalog_path()
+
+    source_type = resolve_source_type(source_value)
+    if source_type == "local":
+        source_path = Path(source_value).expanduser().resolve()
+        catalog_file = source_path if source_path.is_file() else source_path / path_value
+        catalog = load_catalog(catalog_file)
+
+        resolved: dict[str, CatalogRecipeSpec] = {}
+        for name, entry in sorted(catalog.items()):
+            raw_source = str(entry.get("source") or "").strip()
+            source_ref = _optional_nonempty_string(entry.get("ref"))
+            source_subdir = _optional_nonempty_string(entry.get("subdir"))
+            slug = _optional_nonempty_string(entry.get("slug")) or name
+            description = _optional_nonempty_string(entry.get("description"))
+            resolved[name] = CatalogRecipeSpec(
+                name=name,
+                slug=slug,
+                source=_resolve_local_catalog_source(raw_source, catalog_file),
+                source_ref=source_ref,
+                source_subdir=source_subdir,
+                description=description,
+                trusted=entry.get("trusted") if isinstance(entry.get("trusted"), bool) else None,
+            )
+        return resolved
+
+    with checkout_source(source_value, source_ref=ref_value, source_type="git") as source_root:
+        catalog_file = source_root / path_value
+        catalog = load_catalog(catalog_file)
+
+    resolved = {}
+    for name, entry in sorted(catalog.items()):
+        raw_source = str(entry.get("source") or "").strip()
+        raw_entry_ref = _optional_nonempty_string(entry.get("ref"))
+        raw_entry_subdir = _optional_nonempty_string(entry.get("subdir"))
+        slug = _optional_nonempty_string(entry.get("slug")) or name
+        description = _optional_nonempty_string(entry.get("description"))
+
+        if _looks_like_remote_source(raw_source):
+            source = raw_source
+            source_ref = raw_entry_ref
+            source_subdir = raw_entry_subdir
+        else:
+            source = source_value
+            source_ref = raw_entry_ref or ref_value
+            source_subdir = raw_entry_subdir or raw_source
+
+        resolved[name] = CatalogRecipeSpec(
+            name=name,
+            slug=slug,
+            source=source,
+            source_ref=source_ref,
+            source_subdir=source_subdir,
+            description=description,
+            trusted=entry.get("trusted") if isinstance(entry.get("trusted"), bool) else None,
+        )
+    return resolved
 
 
 def is_disabled(recipe_dir: Path) -> bool:
@@ -277,13 +510,13 @@ def _load_plugin(recipe_dir: Path) -> tuple[PluginConfig | None, str | None]:
         return None, str(exc)
 
 
-def discover_plugin_entries(recipes_dir: Path) -> list[PluginEntry]:
-    """List recipe folders with plugin metadata and enablement state."""
+def discover_recipe_entries(recipes_dir: Path) -> list[RecipeEntry]:
+    """List recipe folders with metadata and enablement state."""
     if not recipes_dir.exists() or not recipes_dir.is_dir():
         return []
 
     manifest = load_manifest(recipes_dir)
-    entries: list[PluginEntry] = []
+    entries: list[RecipeEntry] = []
     seen_slugs: set[str] = set()
     for recipe_dir in sorted(path for path in recipes_dir.iterdir() if path.is_dir()):
         slug, recipe_error = _load_recipe_slug(recipe_dir)
@@ -291,7 +524,7 @@ def discover_plugin_entries(recipes_dir: Path) -> list[PluginEntry]:
         error = plugin_error or recipe_error
         manifest_record = get_manifest_record(manifest, slug)
         entries.append(
-            PluginEntry(
+            RecipeEntry(
                 slug=slug,
                 folder=recipe_dir.name,
                 path=recipe_dir,
@@ -304,15 +537,15 @@ def discover_plugin_entries(recipes_dir: Path) -> list[PluginEntry]:
         )
         seen_slugs.add(slug)
 
-    plugins = manifest.get("plugins", {})
-    if isinstance(plugins, dict):
-        for slug, record in sorted(plugins.items()):
+    recipes = manifest.get("recipes", {})
+    if isinstance(recipes, dict):
+        for slug, record in sorted(recipes.items()):
             if slug in seen_slugs or not isinstance(record, dict):
                 continue
             folder = str(record.get("folder") or slug)
             orphan_path = recipes_dir / folder
             entries.append(
-                PluginEntry(
+                RecipeEntry(
                     slug=slug,
                     folder=folder,
                     path=orphan_path,
@@ -326,8 +559,8 @@ def discover_plugin_entries(recipes_dir: Path) -> list[PluginEntry]:
     return entries
 
 
-def find_plugin_entry(entries: list[PluginEntry], slug_or_folder: str) -> PluginEntry | None:
-    """Locate plugin entry by slug or folder name."""
+def find_recipe_entry(entries: list[RecipeEntry], slug_or_folder: str) -> RecipeEntry | None:
+    """Locate recipe entry by slug or folder name."""
     for entry in entries:
         if entry.slug == slug_or_folder or entry.folder == slug_or_folder:
             return entry
@@ -341,7 +574,7 @@ def build_install_commands(
     include_npm: bool = True,
     include_python: bool = True,
 ) -> list[list[str]]:
-    """Build install commands from plugin metadata."""
+    """Build install commands from recipe metadata."""
     commands: list[list[str]] = []
     if include_apt and plugin.dependencies.apt_packages:
         commands.append(["apt-get", "update"])
@@ -364,8 +597,8 @@ def build_install_commands(
 def build_dockerfile_snippet(commands: list[list[str]]) -> str:
     """Render Dockerfile RUN lines for install commands."""
     if not commands:
-        return "# No plugin dependency install steps."
-    rendered = ["# Add these lines to your Dockerfile for plugin dependencies:"]
+        return "# No recipe dependency install steps."
+    rendered = ["# Add these lines to your Dockerfile for recipe dependencies:"]
     for command in commands:
         rendered.append(f"RUN {shlex.join(command)}")
     return "\n".join(rendered)
@@ -386,8 +619,8 @@ def run_commands(
         executor(command, check=True, text=True)
 
 
-def plugin_status_payload(plugin: PluginConfig, *, app_version: str) -> dict[str, object]:
-    """Build plugin payload with computed readiness status."""
+def metadata_status_payload(plugin: PluginConfig, *, app_version: str) -> dict[str, object]:
+    """Build metadata payload with computed readiness status."""
     return build_plugin_payload(plugin, current_web2api_version=app_version)
 
 
@@ -397,7 +630,7 @@ def run_healthcheck(
     timeout_seconds: float = 15.0,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Run plugin healthcheck command and return structured status."""
+    """Run recipe metadata healthcheck command and return structured status."""
     healthcheck = plugin.healthcheck
     if healthcheck is None:
         return {"defined": False, "ran": False, "ok": None}
@@ -439,7 +672,7 @@ def run_healthcheck(
 
 
 def resolve_source_type(source: str) -> SourceType:
-    """Resolve plugin source type from source value."""
+    """Resolve recipe source type from source value."""
     if Path(source).expanduser().exists():
         return "local"
     return "git"
@@ -458,7 +691,7 @@ def checkout_source(
         yield Path(source).expanduser().resolve()
         return
 
-    with tempfile.TemporaryDirectory(prefix="web2api-plugin-src-") as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="web2api-recipe-src-") as tmp_dir:
         target = Path(tmp_dir) / "repo"
         clone_cmd = ["git", "clone", source, str(target)]
         subprocess.run(clone_cmd, check=True, text=True)
@@ -516,6 +749,7 @@ def copy_recipe_into_recipes_dir(
 ) -> tuple[str, Path]:
     """Copy recipe directory into recipes directory using slug as folder name."""
     slug = load_source_recipe_slug(source_recipe_dir)
+    recipes_dir.mkdir(parents=True, exist_ok=True)
     destination = recipes_dir / slug
 
     if destination.exists():
@@ -528,3 +762,48 @@ def copy_recipe_into_recipes_dir(
     if disabled_marker.exists():
         disabled_marker.unlink()
     return slug, destination
+
+
+def install_recipe_from_source(
+    *,
+    source: str,
+    recipes_dir: Path,
+    source_ref: str | None = None,
+    source_subdir: str | None = None,
+    trusted: bool,
+    overwrite: bool = False,
+    record_source_type: SourceType | None = None,
+    expected_slug: str | None = None,
+) -> tuple[str, SourceType]:
+    """Install a recipe from source path/git and persist manifest record."""
+    resolved_source_type = resolve_source_type(source)
+    manifest_source_type = record_source_type or resolved_source_type
+
+    with checkout_source(
+        source,
+        source_ref=source_ref,
+        source_type=resolved_source_type,
+    ) as source_root:
+        source_recipe_dir = resolve_recipe_source_dir(source_root, source_subdir)
+        source_slug = load_source_recipe_slug(source_recipe_dir)
+        if expected_slug is not None and source_slug != expected_slug:
+            raise ValueError(
+                f"source recipe slug '{source_slug}' does not match expected slug '{expected_slug}'"
+            )
+        slug, destination = copy_recipe_into_recipes_dir(
+            source_recipe_dir,
+            recipes_dir,
+            overwrite=overwrite,
+        )
+
+    record_recipe_install(
+        recipes_dir,
+        slug=slug,
+        folder=destination.name,
+        source_type=manifest_source_type,
+        source=source,
+        source_ref=source_ref,
+        source_subdir=source_subdir,
+        trusted=trusted,
+    )
+    return slug, manifest_source_type

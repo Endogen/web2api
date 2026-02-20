@@ -39,9 +39,6 @@ include = ["web2api*"]
 [tool.setuptools.package-data]
 web2api = [
   "templates/*.html",
-  "bundled/plugins/*.yaml",
-  "bundled/recipes/*/*.yaml",
-  "bundled/recipes/*/*.py",
 ]
 
 [tool.ruff]

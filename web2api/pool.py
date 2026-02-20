@@ -12,6 +12,16 @@ from playwright.async_api import Browser, BrowserContext, Page, Playwright, asyn
 
 from web2api.logging_utils import log_event
 
+_DEFAULT_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+_CONTEXT_OPTS: dict = {
+    "user_agent": _DEFAULT_UA,
+    "viewport": {"width": 1920, "height": 1080},
+    "locale": "en-US",
+}
+
 
 @dataclass(slots=True)
 class _ContextSlot:
@@ -75,10 +85,13 @@ class BrowserPool:
                 return
 
             self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch(headless=self.headless)
+            self._browser = await self._playwright.chromium.launch(
+                headless=self.headless,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
             self._context_queue = asyncio.Queue(maxsize=self.max_contexts)
             for slot_id in range(self.max_contexts):
-                context = await self._browser.new_context()
+                context = await self._browser.new_context(**_CONTEXT_OPTS)
                 await self._context_queue.put(_ContextSlot(slot_id=slot_id, context=context))
         log_event(
             logger,
@@ -295,7 +308,7 @@ class BrowserPool:
 
         with suppress(Exception):
             await slot.context.close()
-        new_context = await self._browser.new_context()
+        new_context = await self._browser.new_context(**_CONTEXT_OPTS)
         await context_queue.put(_ContextSlot(slot_id=slot.slot_id, context=new_context))
         log_event(logger, logging.INFO, "browser_pool.context_replaced", slot_id=slot.slot_id)
 
@@ -307,6 +320,6 @@ class BrowserPool:
 
         with suppress(Exception):
             await slot.context.close()
-        new_context = await self._browser.new_context()
+        new_context = await self._browser.new_context(**_CONTEXT_OPTS)
         log_event(logger, logging.INFO, "browser_pool.context_recreated", slot_id=slot.slot_id)
         return _ContextSlot(slot_id=slot.slot_id, context=new_context)

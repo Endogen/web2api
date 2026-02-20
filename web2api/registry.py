@@ -1,4 +1,4 @@
-"""Recipe discovery and optional scraper plugin loading."""
+"""Recipe discovery and optional metadata loading."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ class Recipe:
 
 
 class RecipeRegistry:
-    """Registry of recipe plugins discovered from the filesystem."""
+    """Registry of recipes discovered from the filesystem."""
 
     def __init__(
         self,

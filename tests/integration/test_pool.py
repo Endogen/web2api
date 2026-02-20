@@ -55,7 +55,8 @@ class FakeBrowser:
         self._next_context_id = 1
         self.created_context_ids: list[int] = []
 
-    async def new_context(self) -> FakeContext:
+    async def new_context(self, **kwargs) -> FakeContext:
+        _ = kwargs
         context = FakeContext(self._next_context_id)
         self._next_context_id += 1
         self.created_context_ids.append(context.context_id)
@@ -74,8 +75,13 @@ class FakeChromium:
     def __init__(self, browser: FakeBrowser) -> None:
         self._browser = browser
 
-    async def launch(self, *, headless: bool) -> FakeBrowser:
-        _ = headless
+    async def launch(
+        self,
+        *,
+        headless: bool,
+        args: list[str] | None = None,
+    ) -> FakeBrowser:
+        _ = headless, args
         return self._browser
 
 
@@ -202,7 +208,9 @@ async def test_pool_health_reports_expected_fields(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
-async def test_pool_waiters_do_not_go_negative_when_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_pool_waiters_do_not_go_negative_when_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _patch_playwright(monkeypatch)
     pool = BrowserPool(max_contexts=1, acquire_timeout=0.05)
     await pool.start()

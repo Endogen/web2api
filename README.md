@@ -2,7 +2,21 @@
 
 Turn any website into a REST API by scraping it live with Playwright.
 
-Web2API loads recipe folders from `recipes/` at startup. Each recipe defines endpoints with selectors, actions, fields, and pagination in YAML. Optional Python scrapers handle interactive or complex sites. Optional plugin metadata can declare external dependencies and required env vars. Drop a folder — get an API.
+Web2API starts with no recipes installed by default. Recipes are installed into a local recipes
+directory from a catalog source (local path or git repo), then discovered at runtime. Each recipe
+defines endpoints with selectors, actions, fields, and pagination in YAML. Optional Python
+scrapers handle interactive or complex sites. Optional plugin metadata can declare external
+dependencies and required env vars.
+
+## Terminology
+
+- **Recipe**: a site integration folder (`recipe.yaml` + optional `scraper.py`) that exposes API
+  endpoints.
+- **Plugin metadata**: optional `plugin.yaml` inside a recipe that declares dependencies,
+  healthchecks, and compatibility.
+
+In this project, recipe lifecycle operations are always `recipes` commands. `plugin.yaml` is only
+for optional dependency/runtime metadata inside a recipe.
 
 ## Features
 
@@ -30,6 +44,47 @@ curl -s http://localhost:8010/health | jq
 curl -s http://localhost:8010/api/sites | jq
 ```
 
+Install your first recipe from catalog:
+
+```bash
+web2api recipes catalog add hackernews --yes
+```
+
+## Local Setup (No Docker)
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+playwright install --with-deps chromium
+```
+
+Run service:
+
+```bash
+export RECIPES_DIR="$HOME/.web2api/recipes"
+export WEB2API_RECIPE_CATALOG_SOURCE="https://github.com/Endogen/web2api-recipes.git"
+uvicorn web2api.main:app --host 0.0.0.0 --port 8010
+```
+
+Install recipes:
+
+```bash
+web2api recipes catalog list
+web2api recipes catalog add hackernews --yes
+```
+
+## Server Setup (Recommended Pattern)
+
+1. Provision host with Python 3.12+, Chromium dependencies, and optional Docker/Nginx.
+2. Set persistent recipe storage (`RECIPES_DIR`, for example `/var/lib/web2api/recipes`).
+3. Use the default official catalog repo (`https://github.com/Endogen/web2api-recipes.git`) or
+   override via `WEB2API_RECIPE_CATALOG_SOURCE` (plus optional
+   `WEB2API_RECIPE_CATALOG_REF` / `WEB2API_RECIPE_CATALOG_PATH`).
+4. Run Web2API as a long-lived process (systemd, container, or supervisor).
+5. Install initial recipes via CLI/API/UI.
+6. Put reverse proxy/TLS in front (Nginx/Caddy/Traefik) for production.
+
 ## CLI
 
 Web2API ships with a management CLI:
@@ -38,53 +93,76 @@ Web2API ships with a management CLI:
 web2api --help
 ```
 
-### Plugin Commands
+### Recipe Commands (`recipes`)
 
 ```bash
-# List all recipe folders with plugin readiness
-web2api plugins list
+# List all recipe folders with metadata readiness
+web2api recipes list
 
 # Check missing env vars/commands/packages
-web2api plugins doctor
-web2api plugins doctor x
-web2api plugins doctor x --no-run-healthchecks
-web2api plugins doctor x --allow-untrusted
+web2api recipes doctor
+web2api recipes doctor x
+web2api recipes doctor x --no-run-healthchecks
+web2api recipes doctor x --allow-untrusted
 
-# Install plugin recipe from source
-web2api plugins add ./my-recipe
-web2api plugins add https://github.com/acme/web2api-recipes.git --ref v1.2.0 --subdir recipes/news
+# Install recipe from source
+web2api recipes add ./my-recipe
+web2api recipes add https://github.com/acme/web2api-recipes.git --ref v1.2.0 --subdir recipes/news
 
-# Update managed plugin from recorded source
-web2api plugins update x --yes
-web2api plugins update x --ref v1.3.0 --subdir recipes/x --yes
+# Update managed recipe from recorded source
+web2api recipes update x --yes
+web2api recipes update x --ref v1.3.0 --subdir recipes/x --yes
 
-# Install plugin recipe from catalog
-web2api plugins catalog list
-web2api plugins catalog add hackernews --yes
+# Install recipe from catalog
+web2api recipes catalog list
+web2api recipes catalog add hackernews --yes
+web2api recipes catalog list --catalog-source https://github.com/acme/web2api-recipes.git
 
-# Install declared dependencies for a plugin recipe (host)
-web2api plugins install x --yes
-web2api plugins install x --apt --yes   # include apt packages
+# Install declared dependencies from recipe metadata (host)
+web2api recipes install x --yes
+web2api recipes install x --apt --yes   # include apt packages
 
-# Generate Dockerfile snippet for plugin dependencies
-web2api plugins install x --target docker --apt
+# Generate Dockerfile snippet for recipe metadata dependencies
+web2api recipes install x --target docker --apt
 
-# Remove plugin recipe + manifest record
-web2api plugins uninstall x --yes
+# Remove recipe + manifest record
+web2api recipes uninstall x --yes
 
 # Disable/enable a recipe (writes/removes recipes/<slug>/.disabled)
-web2api plugins disable x --yes
-web2api plugins enable x
+web2api recipes disable x --yes
+web2api recipes enable x
 ```
 
-`plugins install` does not run `apt` installs unless `--apt` is explicitly passed.
-Install-state records are stored in `recipes/.web2api_plugins.json`.
-Default catalog path is `plugins/catalog.yaml` in a source checkout, with a bundled fallback
-inside the installed package.
-`plugins update` works only for plugins tracked in the manifest.
+`recipes install` does not run `apt` installs unless `--apt` is explicitly passed.
+Install-state records are stored in `<RECIPES_DIR>/.web2api_recipes.json`.
+Default `RECIPES_DIR` is `~/.web2api/recipes`.
+Catalog defaults come from:
+- `WEB2API_RECIPE_CATALOG_SOURCE` (path or git URL)
+- `WEB2API_RECIPE_CATALOG_REF` (optional git ref)
+- `WEB2API_RECIPE_CATALOG_PATH` (catalog file path inside source, default `catalog.yaml`)
+If `WEB2API_RECIPE_CATALOG_SOURCE` is unset, Web2API uses the official remote repo
+`https://github.com/Endogen/web2api-recipes.git`.
+`recipes update` works only for recipes tracked in the manifest.
 
-Plugins installed from untrusted sources (for example git URLs) are blocked from executing
+Recipes installed from untrusted sources (for example git URLs) are blocked from executing
 install/healthcheck commands unless `--allow-untrusted` is passed.
+
+### Custom Local Recipes (Without Catalog)
+
+You can use custom recipes without publishing them to the recipe repository:
+
+```bash
+# Direct local path install into RECIPES_DIR (tracked as source_type=local)
+web2api recipes add ./my-recipe --yes
+
+# Or copy folder manually into RECIPES_DIR/<slug> (unmanaged local recipe)
+cp -r ./my-recipe "$RECIPES_DIR/<slug>"
+```
+
+Recipe origin visibility:
+- `source_type=catalog|git|local` in manifest-backed installs
+- `origin=unmanaged` for manual local folders not tracked in manifest
+- The web UI manager shows both catalog recipes and local-only installed recipes
 
 ### Self Update Commands
 
@@ -104,7 +182,8 @@ For `--method git`, `self update apply` checks out a tag:
 - if `--to` is provided, that tag/ref is used
 - if `--to` is omitted, the latest sortable git tag is used
 
-After `self update apply`, the CLI automatically runs `web2api plugins doctor`.
+After `self update apply`, the CLI automatically runs `web2api recipes doctor`.
+
 
 ## Discover Recipes
 
@@ -149,6 +228,17 @@ For custom scraper parameters beyond `page` and `q`, check the specific recipe f
 | `GET /` | HTML index listing all recipes and endpoints |
 | `GET /health` | Service, browser pool, and cache health |
 | `GET /api/sites` | JSON list of all recipes with endpoint metadata |
+| `GET /api/recipes/manage` | JSON catalog + installed recipe state for UI/automation |
+| `POST /api/recipes/manage/install/{name}` | Install recipe by catalog entry name |
+| `POST /api/recipes/manage/update/{slug}` | Update installed managed recipe |
+| `POST /api/recipes/manage/uninstall/{slug}` | Uninstall recipe (add `?force=true` for unmanaged local recipes) |
+| `POST /api/recipes/manage/enable/{slug}` | Enable installed recipe |
+| `POST /api/recipes/manage/disable/{slug}` | Disable installed recipe |
+
+`GET /api/recipes/manage` includes:
+- `catalog`: entries from the current catalog source
+- `installed`: discovered recipes from `RECIPES_DIR`
+- `origin`: one of `catalog`, `git`, `local`, `unmanaged`
 
 ### Recipe Endpoints
 
@@ -221,7 +311,8 @@ recipes/
 - Folder name must match `slug`
 - `slug` cannot be a reserved system route (`api`, `health`, `docs`, `openapi`, `redoc`)
 - Recipe folders containing `.disabled` are skipped by discovery
-- Restart the service to pick up new or changed recipes
+- Recipes installed via CLI/API/UI are loaded immediately
+- If you edit recipe files manually on disk, restart the service to reload them
 - Invalid recipes are skipped with warning logs
 
 ### Example: Declarative Endpoints
@@ -386,7 +477,10 @@ Environment variables (with defaults):
 | `CACHE_TTL_SECONDS` | 30 | Fresh cache duration in seconds |
 | `CACHE_STALE_TTL_SECONDS` | 120 | Stale-while-revalidate window in seconds |
 | `CACHE_MAX_ENTRIES` | 500 | Maximum cached request variants |
-| `RECIPES_DIR` | `./recipes` (or bundled defaults in installed package) | Path to recipes directory |
+| `RECIPES_DIR` | `~/.web2api/recipes` | Path to recipes directory |
+| `WEB2API_RECIPE_CATALOG_SOURCE` | `https://github.com/Endogen/web2api-recipes.git` | Catalog source path or git URL |
+| `WEB2API_RECIPE_CATALOG_REF` | empty | Optional git ref for catalog source |
+| `WEB2API_RECIPE_CATALOG_PATH` | `catalog.yaml` | Catalog file path inside catalog source |
 | `PLUGIN_ENFORCE_COMPATIBILITY` | false | Skip plugin recipes outside declared `web2api` version bounds |
 | `BIRD_AUTH_TOKEN` | empty | X/Twitter auth token for `x` recipe |
 | `BIRD_CT0` | empty | X/Twitter ct0 token for `x` recipe |

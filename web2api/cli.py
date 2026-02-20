@@ -1,4 +1,4 @@
-"""Command line interface for Web2API plugin and self-update workflows."""
+"""Command line interface for Web2API recipe and self-update workflows."""
 
 from __future__ import annotations
 
@@ -12,25 +12,27 @@ from typing import Any, Literal
 import typer
 
 from web2api import __version__
-from web2api.plugin_manager import (
-    DEFAULT_CATALOG_PATH,
+from web2api.recipe_manager import (
     SourceType,
     build_dockerfile_snippet,
+    build_entry_payload,
     build_install_commands,
-    checkout_source,
-    copy_recipe_into_recipes_dir,
+    default_catalog_path,
+    default_catalog_ref,
+    default_catalog_source,
     disable_recipe,
-    discover_plugin_entries,
+    discover_recipe_entries,
     enable_recipe,
-    find_plugin_entry,
+    entry_is_trusted,
+    find_recipe_entry,
     get_manifest_record,
-    load_catalog,
+    install_recipe_from_source,
     load_manifest,
-    load_source_recipe_slug,
-    plugin_status_payload,
-    record_plugin_install,
+    metadata_status_payload,
     remove_manifest_record,
-    resolve_recipe_source_dir,
+    resolve_catalog_recipes,
+    resolve_managed_recipe_source,
+    resolve_recipe_folder,
     resolve_recipes_dir,
     resolve_source_type,
     run_commands,
@@ -50,13 +52,13 @@ app = typer.Typer(
     help="Web2API management CLI.",
     add_completion=False,
 )
-plugins_app = typer.Typer(no_args_is_help=True, help="Manage recipe plugins.")
-catalog_app = typer.Typer(no_args_is_help=True, help="Plugin source catalog commands.")
+recipes_app = typer.Typer(no_args_is_help=True, help="Manage recipes and optional metadata.")
+catalog_app = typer.Typer(no_args_is_help=True, help="Recipe catalog source commands.")
 self_app = typer.Typer(no_args_is_help=True, help="Manage Web2API installation.")
 update_app = typer.Typer(no_args_is_help=True, help="Self-update commands.")
 
-app.add_typer(plugins_app, name="plugins")
-plugins_app.add_typer(catalog_app, name="catalog")
+app.add_typer(recipes_app, name="recipes")
+recipes_app.add_typer(catalog_app, name="catalog")
 app.add_typer(self_app, name="self")
 self_app.add_typer(update_app, name="update")
 
@@ -77,26 +79,23 @@ def _confirm_or_exit(prompt: str, *, yes: bool) -> None:
     raise typer.Exit(code=1)
 
 
-def _entry_trusted(entry_record: dict[str, Any] | None) -> bool:
-    if isinstance(entry_record, dict) and isinstance(entry_record.get("trusted"), bool):
-        return bool(entry_record["trusted"])
-    return True
+def _resolve_catalog_options(
+    *,
+    catalog_source: str | None,
+    catalog_ref: str | None,
+    catalog_path: str | None,
+) -> tuple[str, str | None, str | None]:
+    resolved_source = (
+        catalog_source.strip()
+        if isinstance(catalog_source, str) and catalog_source.strip()
+        else default_catalog_source()
+    )
+    resolved_ref = catalog_ref if catalog_ref is not None else default_catalog_ref()
+    resolved_path = catalog_path if catalog_path is not None else default_catalog_path()
+    return resolved_source, resolved_ref, resolved_path
 
 
-def _resolve_catalog_path(catalog_file: Path | None) -> Path:
-    return DEFAULT_CATALOG_PATH if catalog_file is None else catalog_file
-
-
-def _resolve_catalog_source(raw_source: str, catalog_path: Path) -> str:
-    candidate = Path(raw_source).expanduser()
-    if candidate.is_absolute():
-        return str(candidate)
-    if "://" in raw_source or raw_source.startswith("git@"):
-        return raw_source
-    return str((catalog_path.parent / candidate).resolve())
-
-
-def _add_plugin_from_source(
+def _add_recipe_from_source(
     *,
     source: str,
     source_ref: str | None,
@@ -109,92 +108,42 @@ def _add_plugin_from_source(
     expected_slug: str | None = None,
 ) -> tuple[str, SourceType]:
     resolved_source_type = resolve_source_type(source)
-    manifest_source_type = record_source_type or resolved_source_type
 
     if resolved_source_type == "git":
         _confirm_or_exit(
-            f"Fetch plugin source from git repository '{source}'?",
+            f"Fetch recipe source from git repository '{source}'?",
             yes=yes,
         )
 
-    with checkout_source(
-        source,
-        source_ref=source_ref,
-        source_type=resolved_source_type,
-    ) as source_root:
-        source_recipe_dir = resolve_recipe_source_dir(source_root, source_subdir)
-        source_slug = load_source_recipe_slug(source_recipe_dir)
-        if expected_slug is not None and source_slug != expected_slug:
-            raise ValueError(
-                f"source recipe slug '{source_slug}' does not match expected slug '{expected_slug}'"
-            )
-        slug, destination = copy_recipe_into_recipes_dir(
-            source_recipe_dir,
-            recipes_dir,
-            overwrite=overwrite,
-        )
-
-    record_plugin_install(
-        recipes_dir,
-        slug=slug,
-        folder=destination.name,
-        source_type=manifest_source_type,
+    return install_recipe_from_source(
         source=source,
+        recipes_dir=recipes_dir,
         source_ref=source_ref,
         source_subdir=source_subdir,
         trusted=trusted,
+        overwrite=overwrite,
+        record_source_type=record_source_type,
+        expected_slug=expected_slug,
     )
-    return slug, manifest_source_type
 
 
-@plugins_app.command("list")
-def plugins_list(
+@recipes_app.command("list")
+def recipes_list(
     recipes_dir: Path | None = typer.Option(
         None,
         "--recipes-dir",
         file_okay=False,
         dir_okay=True,
         resolve_path=True,
-        help="Recipe directory to inspect (defaults to RECIPES_DIR or ./recipes).",
+        help="Recipe directory to inspect (defaults to RECIPES_DIR or ~/.web2api/recipes).",
     ),
     json_output: bool = typer.Option(False, "--json", help="Output JSON."),
 ) -> None:
-    """List recipes, plugin availability, and install-state metadata."""
+    """List recipes, metadata readiness, and install-state metadata."""
     target_dir = _recipes_dir_option(recipes_dir)
-    entries = discover_plugin_entries(target_dir)
+    entries = discover_recipe_entries(target_dir)
 
-    payload: list[dict[str, object]] = []
-    for entry in entries:
-        plugin_payload = None
-        if entry.plugin is not None:
-            plugin_payload = plugin_status_payload(entry.plugin, app_version=__version__)
-
-        trusted = _entry_trusted(entry.manifest_record)
-        source_type = None
-        source = None
-        managed = False
-        if entry.manifest_record is not None:
-            managed = True
-            source_type_raw = entry.manifest_record.get("source_type")
-            source_raw = entry.manifest_record.get("source")
-            source_type = str(source_type_raw) if source_type_raw is not None else None
-            source = str(source_raw) if source_raw is not None else None
-
-        payload.append(
-            {
-                "slug": entry.slug,
-                "folder": entry.folder,
-                "enabled": entry.enabled,
-                "has_recipe": entry.has_recipe,
-                "managed": managed,
-                "trusted": trusted,
-                "source_type": source_type,
-                "source": source,
-                "error": entry.error,
-                "plugin": plugin_payload,
-                "path": str(entry.path),
-            }
-        )
+    payload = [build_entry_payload(entry, app_version=__version__) for entry in entries]
 
     if json_output:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
@@ -205,30 +154,32 @@ def plugins_list(
         return
 
     for item in payload:
-        plugin_block = item["plugin"]
-        plugin_ready = "-"
-        plugin_version = "-"
-        if isinstance(plugin_block, dict):
-            status = plugin_block.get("status", {})
+        metadata_block = item["plugin"]
+        metadata_ready = "-"
+        metadata_version = "-"
+        if isinstance(metadata_block, dict):
+            status = metadata_block.get("status", {})
             if isinstance(status, dict):
-                plugin_ready = str(status.get("ready"))
-            plugin_version = str(plugin_block.get("version"))
+                metadata_ready = str(status.get("ready"))
+            metadata_version = str(metadata_block.get("version"))
 
         state = "enabled" if item["enabled"] else "disabled"
         managed = "managed" if item["managed"] else "unmanaged"
         trusted = "trusted" if item["trusted"] else "untrusted"
         source_label = str(item["source_type"] or "-")
+        origin = str(item["origin"])
         line = (
-            f"{item['slug']}: state={state}, {managed}, {trusted}, source={source_label}, "
-            f"plugin={plugin_version}, ready={plugin_ready}, path={item['path']}"
+            f"{item['slug']}: state={state}, {managed}, {trusted}, origin={origin}, "
+            f"source={source_label}, "
+            f"metadata={metadata_version}, ready={metadata_ready}, path={item['path']}"
         )
         typer.echo(line)
         if item["error"]:
             typer.echo(f"  error: {item['error']}")
 
 
-@plugins_app.command("doctor")
-def plugins_doctor(
+@recipes_app.command("doctor")
+def recipes_doctor(
     slug: str | None = typer.Argument(default=None, help="Recipe slug (optional)."),
     recipes_dir: Path | None = typer.Option(
         None,
@@ -236,31 +187,31 @@ def plugins_doctor(
         file_okay=False,
         dir_okay=True,
         resolve_path=True,
-        help="Recipe directory to inspect (defaults to RECIPES_DIR or ./recipes).",
+        help="Recipe directory to inspect (defaults to RECIPES_DIR or ~/.web2api/recipes).",
     ),
     json_output: bool = typer.Option(False, "--json", help="Output JSON."),
     run_healthchecks: bool = typer.Option(
         True,
         "--run-healthchecks/--no-run-healthchecks",
-        help="Run plugin healthcheck commands when configured.",
+        help="Run metadata healthcheck commands when configured.",
     ),
     allow_untrusted: bool = typer.Option(
         False,
         "--allow-untrusted",
-        help="Allow executing checks for plugins marked as untrusted.",
+        help="Allow executing checks for recipes marked as untrusted.",
     ),
     healthcheck_timeout: float = typer.Option(
         15.0,
         "--healthcheck-timeout",
         min=1.0,
-        help="Timeout in seconds for each plugin healthcheck command.",
+        help="Timeout in seconds for each metadata healthcheck command.",
     ),
 ) -> None:
-    """Show plugin readiness details and optional healthcheck results."""
-    entries = discover_plugin_entries(_recipes_dir_option(recipes_dir))
+    """Show recipe metadata readiness details and optional healthcheck results."""
+    entries = discover_recipe_entries(_recipes_dir_option(recipes_dir))
 
     if slug is not None:
-        selected = find_plugin_entry(entries, slug)
+        selected = find_recipe_entry(entries, slug)
         entries = [selected] if selected is not None else []
     if not entries:
         typer.echo("No matching recipes found.", err=True)
@@ -268,10 +219,10 @@ def plugins_doctor(
 
     report: list[dict[str, object]] = []
     for entry in entries:
-        trusted = _entry_trusted(entry.manifest_record)
+        trusted = entry_is_trusted(entry.manifest_record)
         status_payload = None
         if entry.plugin is not None:
-            status_payload = plugin_status_payload(entry.plugin, app_version=__version__)
+            status_payload = metadata_status_payload(entry.plugin, app_version=__version__)
 
         healthcheck_payload: dict[str, Any] | None = None
         if entry.plugin is not None and run_healthchecks:
@@ -281,7 +232,7 @@ def plugins_doctor(
                         "defined": True,
                         "ran": False,
                         "ok": None,
-                        "skipped": "untrusted plugin; pass --allow-untrusted to run healthcheck",
+                        "skipped": "untrusted recipe; pass --allow-untrusted to run healthcheck",
                     }
             else:
                 healthcheck_payload = run_healthcheck(
@@ -309,13 +260,13 @@ def plugins_doctor(
             if not item["enabled"]:
                 typer.echo(f"{slug_value}: disabled ({trusted})")
                 continue
-            plugin_block = item["plugin"]
-            if not isinstance(plugin_block, dict):
+            metadata_block = item["plugin"]
+            if not isinstance(metadata_block, dict):
                 typer.echo(f"{slug_value}: no plugin.yaml ({trusted})")
                 continue
-            status = plugin_block.get("status")
+            status = metadata_block.get("status")
             if not isinstance(status, dict):
-                typer.echo(f"{slug_value}: plugin status unavailable ({trusted})")
+                typer.echo(f"{slug_value}: metadata status unavailable ({trusted})")
                 continue
             ready = status.get("ready")
             typer.echo(f"{slug_value}: ready={ready} ({trusted})")
@@ -343,9 +294,9 @@ def plugins_doctor(
 
     failed = False
     for item in report:
-        plugin_block = item["plugin"]
-        if isinstance(plugin_block, dict):
-            status = plugin_block.get("status")
+        metadata_block = item["plugin"]
+        if isinstance(metadata_block, dict):
+            status = metadata_block.get("status")
             if isinstance(status, dict) and status.get("ready") is False:
                 failed = True
 
@@ -356,8 +307,8 @@ def plugins_doctor(
         raise typer.Exit(code=1)
 
 
-@plugins_app.command("install")
-def plugins_install(
+@recipes_app.command("install")
+def recipes_install(
     slug: str = typer.Argument(help="Recipe slug to install dependencies for."),
     recipes_dir: Path | None = typer.Option(
         None,
@@ -365,7 +316,7 @@ def plugins_install(
         file_okay=False,
         dir_okay=True,
         resolve_path=True,
-        help="Recipe directory to inspect (defaults to RECIPES_DIR or ./recipes).",
+        help="Recipe directory to inspect (defaults to RECIPES_DIR or ~/.web2api/recipes).",
     ),
     yes: bool = typer.Option(False, "--yes", help="Run install commands without prompt."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print commands without executing."),
@@ -383,7 +334,7 @@ def plugins_install(
     allow_untrusted: bool = typer.Option(
         False,
         "--allow-untrusted",
-        help="Allow command execution for plugins marked as untrusted.",
+        help="Allow command execution for recipes marked as untrusted.",
     ),
     target: Literal["host", "docker"] = typer.Option(
         "host",
@@ -392,8 +343,8 @@ def plugins_install(
     ),
 ) -> None:
     """Install dependencies declared in plugin.yaml."""
-    entries = discover_plugin_entries(_recipes_dir_option(recipes_dir))
-    entry = find_plugin_entry(entries, slug)
+    entries = discover_recipe_entries(_recipes_dir_option(recipes_dir))
+    entry = find_recipe_entry(entries, slug)
     if entry is None:
         typer.echo(f"Recipe '{slug}' was not found.", err=True)
         raise typer.Exit(code=1)
@@ -401,10 +352,10 @@ def plugins_install(
         typer.echo(f"Recipe '{entry.slug}' has no plugin.yaml.", err=True)
         raise typer.Exit(code=1)
 
-    trusted = _entry_trusted(entry.manifest_record)
+    trusted = entry_is_trusted(entry.manifest_record)
     if not trusted and not allow_untrusted:
         typer.echo(
-            f"Plugin '{entry.slug}' is marked untrusted. "
+            f"Recipe '{entry.slug}' is marked untrusted. "
             "Pass --allow-untrusted to execute install commands.",
             err=True,
         )
@@ -419,7 +370,7 @@ def plugins_install(
     if target == "docker":
         typer.echo(build_dockerfile_snippet(commands))
     elif not commands:
-        typer.echo("No install actions are defined for this plugin.")
+        typer.echo("No install actions are defined for this recipe metadata.")
     else:
         for command in commands:
             _print_command(command)
@@ -436,9 +387,9 @@ def plugins_install(
             typer.echo(f"Install command failed with exit code {exc.returncode}.", err=True)
             raise typer.Exit(code=exc.returncode) from exc
 
-    payload = plugin_status_payload(entry.plugin, app_version=__version__)
+    payload = metadata_status_payload(entry.plugin, app_version=__version__)
     status = payload["status"]
-    typer.echo(f"Plugin '{entry.slug}' ready={status['ready']}")
+    typer.echo(f"Recipe '{entry.slug}' metadata ready={status['ready']}")
     checks = status["checks"]
     for name in ("env", "commands", "python"):
         missing = checks[name]["missing"]
@@ -446,16 +397,16 @@ def plugins_install(
             typer.echo(f"  missing {name}: {', '.join(missing)}")
 
 
-@plugins_app.command("add")
-def plugins_add(
-    source: str = typer.Argument(help="Plugin source path or git URL."),
+@recipes_app.command("add")
+def recipes_add(
+    source: str = typer.Argument(help="Recipe source path or git URL."),
     recipes_dir: Path | None = typer.Option(
         None,
         "--recipes-dir",
         file_okay=False,
         dir_okay=True,
         resolve_path=True,
-        help="Recipe directory to install into (defaults to RECIPES_DIR or ./recipes).",
+        help="Recipe directory to install into (defaults to RECIPES_DIR or ~/.web2api/recipes).",
     ),
     source_ref: str | None = typer.Option(None, "--ref", help="Git branch/tag/commit to checkout."),
     source_subdir: str | None = typer.Option(
@@ -471,13 +422,13 @@ def plugins_add(
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite existing recipe folder."),
     yes: bool = typer.Option(False, "--yes", help="Continue without interactive confirmation."),
 ) -> None:
-    """Install a plugin recipe from local path or git source."""
+    """Install a recipe from local path or git source."""
     target_dir = _recipes_dir_option(recipes_dir)
     source_type = resolve_source_type(source)
     trusted_value = trusted or source_type == "local"
 
     try:
-        slug, recorded_type = _add_plugin_from_source(
+        slug, recorded_type = _add_recipe_from_source(
             source=source,
             source_ref=source_ref,
             source_subdir=source_subdir,
@@ -487,18 +438,18 @@ def plugins_add(
             yes=yes,
         )
     except (ValueError, FileNotFoundError, subprocess.CalledProcessError) as exc:
-        typer.echo(f"Failed to install plugin from source: {exc}", err=True)
+        typer.echo(f"Failed to install recipe from source: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     trust_label = "trusted" if trusted_value else "untrusted"
     typer.echo(
-        f"Installed plugin '{slug}' from {recorded_type} source ({trust_label}). "
-        f"Run `web2api plugins install {slug}` to install dependencies."
+        f"Installed recipe '{slug}' from {recorded_type} source ({trust_label}). "
+        f"Run `web2api recipes install {slug}` to install dependencies."
     )
 
 
-@plugins_app.command("update")
-def plugins_update(
+@recipes_app.command("update")
+def recipes_update(
     slug: str = typer.Argument(help="Recipe slug to update from recorded source."),
     recipes_dir: Path | None = typer.Option(
         None,
@@ -506,7 +457,7 @@ def plugins_update(
         file_okay=False,
         dir_okay=True,
         resolve_path=True,
-        help="Recipe directory to inspect (defaults to RECIPES_DIR or ./recipes).",
+        help="Recipe directory to inspect (defaults to RECIPES_DIR or ~/.web2api/recipes).",
     ),
     source_ref: str | None = typer.Option(
         None,
@@ -520,58 +471,46 @@ def plugins_update(
     ),
     yes: bool = typer.Option(False, "--yes", help="Update without prompt."),
 ) -> None:
-    """Update a managed plugin from its recorded source."""
+    """Update a managed recipe from its recorded source."""
     target_dir = _recipes_dir_option(recipes_dir)
-    entries = discover_plugin_entries(target_dir)
-    entry = find_plugin_entry(entries, slug)
+    entries = discover_recipe_entries(target_dir)
+    entry = find_recipe_entry(entries, slug)
     manifest = load_manifest(target_dir)
     manifest_record = get_manifest_record(manifest, slug)
 
     if manifest_record is None:
         typer.echo(
-            f"Plugin '{slug}' is not tracked in manifest. "
-            "Use `web2api plugins add` to install managed plugins.",
+            f"Recipe '{slug}' is not tracked in manifest. "
+            "Use `web2api recipes add` to install managed recipes.",
             err=True,
         )
         raise typer.Exit(code=1)
 
-    source_raw = manifest_record.get("source")
-    if not isinstance(source_raw, str) or not source_raw.strip():
-        typer.echo(
-            f"Plugin '{slug}' has no recorded source in manifest.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-    source = source_raw.strip()
+    try:
+        managed_source = resolve_managed_recipe_source(manifest_record, slug=slug)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
 
-    manifest_source_ref = manifest_record.get("source_ref")
+    source = managed_source.source
     source_ref_value = source_ref if source_ref is not None else None
-    if source_ref_value is None and isinstance(manifest_source_ref, str):
-        source_ref_value = manifest_source_ref
-
-    manifest_source_subdir = manifest_record.get("source_subdir")
+    if source_ref_value is None:
+        source_ref_value = managed_source.source_ref
     source_subdir_value = source_subdir if source_subdir is not None else None
-    if source_subdir_value is None and isinstance(manifest_source_subdir, str):
-        source_subdir_value = manifest_source_subdir
+    if source_subdir_value is None:
+        source_subdir_value = managed_source.source_subdir
 
-    trusted = _entry_trusted(manifest_record)
-    manifest_source_type_raw = manifest_record.get("source_type")
-    record_source_type: SourceType | None = None
-    if manifest_source_type_raw == "local":
-        record_source_type = "local"
-    elif manifest_source_type_raw == "git":
-        record_source_type = "git"
-    elif manifest_source_type_raw == "catalog":
-        record_source_type = "catalog"
+    trusted = managed_source.trusted
+    record_source_type = managed_source.source_type
 
     was_disabled = entry is not None and not entry.enabled
     _confirm_or_exit(
-        f"Update plugin '{slug}' from source '{source}'?",
+        f"Update recipe '{slug}' from source '{source}'?",
         yes=yes,
     )
 
     try:
-        updated_slug, recorded_type = _add_plugin_from_source(
+        updated_slug, recorded_type = _add_recipe_from_source(
             source=source,
             source_ref=source_ref_value,
             source_subdir=source_subdir_value,
@@ -583,18 +522,18 @@ def plugins_update(
             expected_slug=slug,
         )
     except (ValueError, FileNotFoundError, subprocess.CalledProcessError) as exc:
-        typer.echo(f"Failed to update plugin '{slug}': {exc}", err=True)
+        typer.echo(f"Failed to update recipe '{slug}': {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     if was_disabled:
         disable_recipe(target_dir / updated_slug)
 
     trust_label = "trusted" if trusted else "untrusted"
-    typer.echo(f"Updated plugin '{updated_slug}' from {recorded_type} source ({trust_label}).")
+    typer.echo(f"Updated recipe '{updated_slug}' from {recorded_type} source ({trust_label}).")
 
 
-@plugins_app.command("uninstall")
-def plugins_uninstall(
+@recipes_app.command("uninstall")
+def recipes_uninstall(
     slug: str = typer.Argument(help="Recipe slug to uninstall."),
     recipes_dir: Path | None = typer.Option(
         None,
@@ -602,13 +541,13 @@ def plugins_uninstall(
         file_okay=False,
         dir_okay=True,
         resolve_path=True,
-        help="Recipe directory to inspect (defaults to RECIPES_DIR or ./recipes).",
+        help="Recipe directory to inspect (defaults to RECIPES_DIR or ~/.web2api/recipes).",
     ),
     yes: bool = typer.Option(False, "--yes", help="Uninstall without prompt."),
     force: bool = typer.Option(
         False,
         "--force",
-        help="Allow uninstalling plugins not tracked in manifest.",
+        help="Allow uninstalling recipes not tracked in manifest.",
     ),
     delete_files: bool = typer.Option(
         True,
@@ -616,36 +555,29 @@ def plugins_uninstall(
         help="Delete recipe directory on uninstall.",
     ),
 ) -> None:
-    """Uninstall a plugin recipe and remove its manifest record."""
+    """Uninstall a recipe and remove its manifest record."""
     target_dir = _recipes_dir_option(recipes_dir)
-    entries = discover_plugin_entries(target_dir)
-    entry = find_plugin_entry(entries, slug)
+    entries = discover_recipe_entries(target_dir)
+    entry = find_recipe_entry(entries, slug)
     manifest = load_manifest(target_dir)
     manifest_record = get_manifest_record(manifest, slug)
 
     if entry is None and manifest_record is None:
-        typer.echo(f"Plugin '{slug}' was not found in recipes or manifest.", err=True)
+        typer.echo(f"Recipe '{slug}' was not found in recipes or manifest.", err=True)
         raise typer.Exit(code=1)
 
     if manifest_record is None and not force:
         typer.echo(
-            f"Plugin '{slug}' is not tracked in manifest. "
-            "Use `plugins disable` or pass --force to remove files anyway.",
+            f"Recipe '{slug}' is not tracked in manifest. "
+            "Use `recipes disable` or pass --force to remove files anyway.",
             err=True,
         )
         raise typer.Exit(code=1)
 
-    folder = None
-    if entry is not None:
-        folder = entry.folder
-    elif isinstance(manifest_record, dict):
-        folder = str(manifest_record.get("folder") or slug)
-    else:
-        folder = slug
-
+    folder = resolve_recipe_folder(slug=slug, entry=entry, manifest_record=manifest_record)
     recipe_path = target_dir / folder
     _confirm_or_exit(
-        f"Uninstall plugin '{slug}' (folder: {recipe_path})?",
+        f"Uninstall recipe '{slug}' (folder: {recipe_path})?",
         yes=yes,
     )
 
@@ -658,13 +590,13 @@ def plugins_uninstall(
         typer.echo(f"Removed manifest record for '{slug}'.")
 
     if not removed and not recipe_path.exists():
-        typer.echo(f"Plugin '{slug}' was not installed or already removed.")
+        typer.echo(f"Recipe '{slug}' was not installed or already removed.")
     else:
-        typer.echo(f"Uninstalled plugin '{slug}'.")
+        typer.echo(f"Uninstalled recipe '{slug}'.")
 
 
-@plugins_app.command("enable")
-def plugins_enable(
+@recipes_app.command("enable")
+def recipes_enable(
     slug: str = typer.Argument(help="Recipe slug to enable."),
     recipes_dir: Path | None = typer.Option(
         None,
@@ -672,12 +604,12 @@ def plugins_enable(
         file_okay=False,
         dir_okay=True,
         resolve_path=True,
-        help="Recipe directory to inspect (defaults to RECIPES_DIR or ./recipes).",
+        help="Recipe directory to inspect (defaults to RECIPES_DIR or ~/.web2api/recipes).",
     ),
 ) -> None:
     """Enable a recipe by removing .disabled marker."""
-    entries = discover_plugin_entries(_recipes_dir_option(recipes_dir))
-    entry = find_plugin_entry(entries, slug)
+    entries = discover_recipe_entries(_recipes_dir_option(recipes_dir))
+    entry = find_recipe_entry(entries, slug)
     if entry is None:
         typer.echo(f"Recipe '{slug}' was not found.", err=True)
         raise typer.Exit(code=1)
@@ -688,8 +620,8 @@ def plugins_enable(
     typer.echo(f"Enabled recipe '{entry.slug}'.")
 
 
-@plugins_app.command("disable")
-def plugins_disable(
+@recipes_app.command("disable")
+def recipes_disable(
     slug: str = typer.Argument(help="Recipe slug to disable."),
     recipes_dir: Path | None = typer.Option(
         None,
@@ -697,13 +629,13 @@ def plugins_disable(
         file_okay=False,
         dir_okay=True,
         resolve_path=True,
-        help="Recipe directory to inspect (defaults to RECIPES_DIR or ./recipes).",
+        help="Recipe directory to inspect (defaults to RECIPES_DIR or ~/.web2api/recipes).",
     ),
     yes: bool = typer.Option(False, "--yes", help="Disable without prompt."),
 ) -> None:
     """Disable a recipe by writing .disabled marker."""
-    entries = discover_plugin_entries(_recipes_dir_option(recipes_dir))
-    entry = find_plugin_entry(entries, slug)
+    entries = discover_recipe_entries(_recipes_dir_option(recipes_dir))
+    entry = find_recipe_entry(entries, slug)
     if entry is None:
         typer.echo(f"Recipe '{slug}' was not found.", err=True)
         raise typer.Exit(code=1)
@@ -716,54 +648,97 @@ def plugins_disable(
 
 
 @catalog_app.command("list")
-def plugins_catalog_list(
-    catalog_file: Path | None = typer.Option(
+def recipes_catalog_list(
+    catalog_source: str | None = typer.Option(
         None,
-        "--catalog-file",
-        file_okay=True,
-        dir_okay=False,
-        resolve_path=True,
-        help="Path to plugin catalog YAML (defaults to plugins/catalog.yaml).",
+        "--catalog-source",
+        help=(
+            "Catalog source path or git URL. Defaults to WEB2API_RECIPE_CATALOG_SOURCE "
+            "or the default official recipe repository."
+        ),
+    ),
+    catalog_ref: str | None = typer.Option(
+        None,
+        "--catalog-ref",
+        help="Optional git branch/tag/commit for --catalog-source.",
+    ),
+    catalog_path: str | None = typer.Option(
+        None,
+        "--catalog-path",
+        help="Catalog file path inside --catalog-source (default: catalog.yaml).",
     ),
     json_output: bool = typer.Option(False, "--json", help="Output JSON."),
 ) -> None:
-    """List available plugin catalog entries."""
-    resolved_catalog = _resolve_catalog_path(catalog_file)
+    """List available recipe catalog entries."""
     try:
-        catalog = load_catalog(resolved_catalog)
-    except ValueError as exc:
-        typer.echo(f"Invalid catalog: {exc}", err=True)
+        source_value, ref_value, path_value = _resolve_catalog_options(
+            catalog_source=catalog_source,
+            catalog_ref=catalog_ref,
+            catalog_path=catalog_path,
+        )
+        catalog = resolve_catalog_recipes(
+            catalog_source=source_value,
+            catalog_ref=ref_value,
+            catalog_path=path_value,
+        )
+    except (ValueError, FileNotFoundError, subprocess.CalledProcessError) as exc:
+        typer.echo(f"Failed to load catalog: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     if json_output:
-        typer.echo(json.dumps(catalog, indent=2, sort_keys=True))
+        payload = {
+            name: {
+                "slug": spec.slug,
+                "source": spec.source,
+                "ref": spec.source_ref,
+                "subdir": spec.source_subdir,
+                "description": spec.description,
+                "trusted": spec.trusted,
+            }
+            for name, spec in sorted(catalog.items())
+        }
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
 
     if not catalog:
-        typer.echo(f"No catalog entries found in {resolved_catalog}.")
+        typer.echo(f"No catalog entries found in {source_value}.")
         return
 
-    typer.echo(f"Catalog: {resolved_catalog}")
-    for name, entry in sorted(catalog.items()):
-        source = str(entry.get("source", ""))
-        description = str(entry.get("description") or "")
-        trusted = entry.get("trusted")
-        trusted_label = "trusted" if trusted is True else "untrusted"
-        typer.echo(f"{name}: source={source}, {trusted_label}")
-        if description:
-            typer.echo(f"  {description}")
+    typer.echo(f"Catalog source: {source_value}")
+    if ref_value:
+        typer.echo(f"Catalog ref: {ref_value}")
+    if path_value:
+        typer.echo(f"Catalog path: {path_value}")
+    for name, spec in sorted(catalog.items()):
+        trusted_label = "trusted" if spec.trusted is True else "untrusted"
+        typer.echo(
+            f"{name}: slug={spec.slug}, source={spec.source}, "
+            f"subdir={spec.source_subdir or '-'}, {trusted_label}"
+        )
+        if spec.description:
+            typer.echo(f"  {spec.description}")
 
 
 @catalog_app.command("add")
-def plugins_catalog_add(
-    name: str = typer.Argument(help="Catalog plugin entry name to install."),
-    catalog_file: Path | None = typer.Option(
+def recipes_catalog_add(
+    name: str = typer.Argument(help="Catalog recipe entry name to install."),
+    catalog_source: str | None = typer.Option(
         None,
-        "--catalog-file",
-        file_okay=True,
-        dir_okay=False,
-        resolve_path=True,
-        help="Path to plugin catalog YAML (defaults to plugins/catalog.yaml).",
+        "--catalog-source",
+        help=(
+            "Catalog source path or git URL. Defaults to WEB2API_RECIPE_CATALOG_SOURCE "
+            "or the default official recipe repository."
+        ),
+    ),
+    catalog_ref: str | None = typer.Option(
+        None,
+        "--catalog-ref",
+        help="Optional git branch/tag/commit for --catalog-source.",
+    ),
+    catalog_path: str | None = typer.Option(
+        None,
+        "--catalog-path",
+        help="Catalog file path inside --catalog-source (default: catalog.yaml).",
     ),
     recipes_dir: Path | None = typer.Option(
         None,
@@ -771,7 +746,7 @@ def plugins_catalog_add(
         file_okay=False,
         dir_okay=True,
         resolve_path=True,
-        help="Recipe directory to install into (defaults to RECIPES_DIR or ./recipes).",
+        help="Recipe directory to install into (defaults to RECIPES_DIR or ~/.web2api/recipes).",
     ),
     trusted: bool = typer.Option(
         False,
@@ -781,40 +756,36 @@ def plugins_catalog_add(
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite existing recipe folder."),
     yes: bool = typer.Option(False, "--yes", help="Continue without interactive confirmation."),
 ) -> None:
-    """Install a plugin recipe from configured catalog entry."""
-    resolved_catalog = _resolve_catalog_path(catalog_file)
+    """Install a recipe from configured catalog entry."""
     try:
-        catalog = load_catalog(resolved_catalog)
-    except ValueError as exc:
-        typer.echo(f"Invalid catalog: {exc}", err=True)
+        source_value, ref_value, path_value = _resolve_catalog_options(
+            catalog_source=catalog_source,
+            catalog_ref=catalog_ref,
+            catalog_path=catalog_path,
+        )
+        catalog = resolve_catalog_recipes(
+            catalog_source=source_value,
+            catalog_ref=ref_value,
+            catalog_path=path_value,
+        )
+    except (ValueError, FileNotFoundError, subprocess.CalledProcessError) as exc:
+        typer.echo(f"Failed to load catalog: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    entry = catalog.get(name)
-    if entry is None:
-        typer.echo(f"Catalog entry '{name}' was not found in {resolved_catalog}.", err=True)
+    spec = catalog.get(name)
+    if spec is None:
+        typer.echo(f"Catalog entry '{name}' was not found in {source_value}.", err=True)
         raise typer.Exit(code=1)
 
-    raw_source = str(entry.get("source") or "")
-    if not raw_source:
-        typer.echo(f"Catalog entry '{name}' has empty source.", err=True)
-        raise typer.Exit(code=1)
-
-    source = _resolve_catalog_source(raw_source, resolved_catalog)
-    source_ref_raw = entry.get("ref")
-    source_ref = str(source_ref_raw) if isinstance(source_ref_raw, str) else None
-    source_subdir_raw = entry.get("subdir")
-    source_subdir = str(source_subdir_raw) if isinstance(source_subdir_raw, str) else None
-
-    catalog_trusted = entry.get("trusted")
-    trusted_value = trusted or bool(catalog_trusted)
+    trusted_value = trusted or bool(spec.trusted)
 
     target_dir = _recipes_dir_option(recipes_dir)
 
     try:
-        slug, _ = _add_plugin_from_source(
-            source=source,
-            source_ref=source_ref,
-            source_subdir=source_subdir,
+        slug, _ = _add_recipe_from_source(
+            source=spec.source,
+            source_ref=spec.source_ref,
+            source_subdir=spec.source_subdir,
             recipes_dir=target_dir,
             trusted=trusted_value,
             overwrite=overwrite,
@@ -822,11 +793,11 @@ def plugins_catalog_add(
             record_source_type="catalog",
         )
     except (ValueError, FileNotFoundError, subprocess.CalledProcessError) as exc:
-        typer.echo(f"Failed to install catalog plugin '{name}': {exc}", err=True)
+        typer.echo(f"Failed to install catalog recipe '{name}': {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     trust_label = "trusted" if trusted_value else "untrusted"
-    typer.echo(f"Installed catalog plugin '{name}' as slug '{slug}' ({trust_label}).")
+    typer.echo(f"Installed catalog recipe '{name}' as slug '{slug}' ({trust_label}).")
 
 
 @self_app.command("version")
@@ -947,9 +918,9 @@ def self_update_apply(
         raise typer.Exit(code=exc.returncode) from exc
 
     typer.echo("Update command sequence completed.")
-    typer.echo("Running post-update plugin diagnostics (`web2api plugins doctor`)...")
+    typer.echo("Running post-update recipe diagnostics (`web2api recipes doctor`)...")
     try:
-        plugins_doctor(
+        recipes_doctor(
             slug=None,
             recipes_dir=None,
             json_output=False,
@@ -960,7 +931,7 @@ def self_update_apply(
     except typer.Exit as exc:
         if exc.exit_code not in {None, 0}:
             typer.echo(
-                "Plugin diagnostics reported issues. Review output above.",
+                "Recipe diagnostics reported issues. Review output above.",
                 err=True,
             )
 

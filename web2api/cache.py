@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from time import monotonic
-from typing import Awaitable, Callable, Literal, TypeAlias
+from typing import Literal
 
 from web2api.schemas import ApiResponse
 
-CacheKey: TypeAlias = tuple[str, str, int, str | None, tuple[tuple[str, str], ...]]
+type CacheKey = tuple[str, str, int, str | None, tuple[tuple[str, str], ...]]
 LookupState = Literal["miss", "fresh", "stale"]
 
 

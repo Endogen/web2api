@@ -10,15 +10,15 @@ from typer.testing import CliRunner
 
 from web2api import cli
 from web2api.plugin import parse_plugin_config
-from web2api.plugin_manager import PluginEntry
+from web2api.recipe_manager import CatalogRecipeSpec, RecipeEntry
 
 
-def test_plugins_install_defaults_to_no_apt(
+def test_recipes_install_defaults_to_no_apt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     plugin = parse_plugin_config({"version": "1.0.0"})
-    entry = PluginEntry(
+    entry = RecipeEntry(
         slug="x",
         folder="x",
         path=tmp_path,
@@ -39,11 +39,11 @@ def test_plugins_install_defaults_to_no_apt(
         captured["include_python"] = include_python
         return []
 
-    monkeypatch.setattr("web2api.cli.discover_plugin_entries", lambda recipes_dir: [entry])
+    monkeypatch.setattr("web2api.cli.discover_recipe_entries", lambda recipes_dir: [entry])
     monkeypatch.setattr("web2api.cli.build_install_commands", _fake_build_install_commands)
 
     runner = CliRunner()
-    result = runner.invoke(cli.app, ["plugins", "install", "x", "--yes", "--dry-run"])
+    result = runner.invoke(cli.app, ["recipes", "install", "x", "--yes", "--dry-run"])
 
     assert result.exit_code == 0
 
@@ -52,7 +52,17 @@ def test_plugins_install_defaults_to_no_apt(
     assert captured["include_python"] is True
 
 
-def test_self_update_apply_runs_plugins_doctor(
+def test_recipes_list_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("web2api.cli.discover_recipe_entries", lambda recipes_dir: [])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.app, ["recipes", "list"])
+
+    assert result.exit_code == 0
+    assert "No recipe folders found" in result.output
+
+
+def test_self_update_apply_runs_recipes_doctor(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -81,7 +91,7 @@ def test_self_update_apply_runs_plugins_doctor(
         called["doctor"] = True
 
     monkeypatch.setattr("web2api.cli.apply_update_commands", _fake_apply_update_commands)
-    monkeypatch.setattr("web2api.cli.plugins_doctor", _fake_doctor)
+    monkeypatch.setattr("web2api.cli.recipes_doctor", _fake_doctor)
 
     cli.self_update_apply(
         method="auto",
@@ -109,7 +119,7 @@ def test_self_update_apply_does_not_fail_on_doctor_nonzero(
         lambda commands, dry_run: None,
     )
     monkeypatch.setattr(
-        "web2api.cli.plugins_doctor",
+        "web2api.cli.recipes_doctor",
         lambda **kwargs: (_ for _ in ()).throw(typer.Exit(code=1)),
     )
 
@@ -122,8 +132,8 @@ def test_self_update_apply_does_not_fail_on_doctor_nonzero(
     )
 
 
-def test_plugins_uninstall_requires_force_for_unmanaged(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry = PluginEntry(
+def test_recipes_uninstall_requires_force_for_unmanaged(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry = RecipeEntry(
         slug="x",
         folder="x",
         path=Path("/tmp/x"),
@@ -133,24 +143,24 @@ def test_plugins_uninstall_requires_force_for_unmanaged(monkeypatch: pytest.Monk
         error=None,
         manifest_record=None,
     )
-    monkeypatch.setattr("web2api.cli.discover_plugin_entries", lambda recipes_dir: [entry])
+    monkeypatch.setattr("web2api.cli.discover_recipe_entries", lambda recipes_dir: [entry])
     monkeypatch.setattr(
         "web2api.cli.load_manifest",
-        lambda recipes_dir: {"version": 1, "plugins": {}},
+        lambda recipes_dir: {"version": 1, "recipes": {}},
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli.app, ["plugins", "uninstall", "x", "--yes"])
+    result = runner.invoke(cli.app, ["recipes", "uninstall", "x", "--yes"])
 
     assert result.exit_code == 1
     assert "not tracked in manifest" in result.output
 
 
-def test_plugins_update_uses_manifest_source_and_preserves_disabled_state(
+def test_recipes_update_uses_manifest_source_and_preserves_disabled_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    entry = PluginEntry(
+    entry = RecipeEntry(
         slug="x",
         folder="x",
         path=tmp_path / "x",
@@ -166,12 +176,12 @@ def test_plugins_update_uses_manifest_source_and_preserves_disabled_state(
             "trusted": False,
         },
     )
-    monkeypatch.setattr("web2api.cli.discover_plugin_entries", lambda recipes_dir: [entry])
+    monkeypatch.setattr("web2api.cli.discover_recipe_entries", lambda recipes_dir: [entry])
     monkeypatch.setattr(
         "web2api.cli.load_manifest",
         lambda recipes_dir: {
             "version": 1,
-            "plugins": {
+            "recipes": {
                 "x": {
                     "source_type": "catalog",
                     "source": "https://example.com/repo.git",
@@ -186,7 +196,7 @@ def test_plugins_update_uses_manifest_source_and_preserves_disabled_state(
 
     captured: dict[str, object] = {}
 
-    def _fake_add_plugin_from_source(**kwargs):
+    def _fake_add_recipe_from_source(**kwargs):
         captured.update(kwargs)
         return "x", "catalog"
 
@@ -195,14 +205,14 @@ def test_plugins_update_uses_manifest_source_and_preserves_disabled_state(
     def _fake_disable_recipe(path: Path) -> None:
         disabled["path"] = path
 
-    monkeypatch.setattr("web2api.cli._add_plugin_from_source", _fake_add_plugin_from_source)
+    monkeypatch.setattr("web2api.cli._add_recipe_from_source", _fake_add_recipe_from_source)
     monkeypatch.setattr("web2api.cli.disable_recipe", _fake_disable_recipe)
 
     runner = CliRunner()
     result = runner.invoke(
         cli.app,
         [
-            "plugins",
+            "recipes",
             "update",
             "x",
             "--recipes-dir",
@@ -226,8 +236,8 @@ def test_plugins_update_uses_manifest_source_and_preserves_disabled_state(
     assert disabled["path"] == tmp_path / "x"
 
 
-def test_plugins_update_requires_managed_plugin(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry = PluginEntry(
+def test_recipes_update_requires_managed_recipe(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry = RecipeEntry(
         slug="x",
         folder="x",
         path=Path("/tmp/x"),
@@ -237,23 +247,23 @@ def test_plugins_update_requires_managed_plugin(monkeypatch: pytest.MonkeyPatch)
         error=None,
         manifest_record=None,
     )
-    monkeypatch.setattr("web2api.cli.discover_plugin_entries", lambda recipes_dir: [entry])
+    monkeypatch.setattr("web2api.cli.discover_recipe_entries", lambda recipes_dir: [entry])
     monkeypatch.setattr(
         "web2api.cli.load_manifest",
-        lambda recipes_dir: {"version": 1, "plugins": {}},
+        lambda recipes_dir: {"version": 1, "recipes": {}},
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli.app, ["plugins", "update", "x", "--yes"])
+    result = runner.invoke(cli.app, ["recipes", "update", "x", "--yes"])
 
     assert result.exit_code == 1
     assert "not tracked in manifest" in result.output
 
 
-def test_plugins_uninstall_removes_manifest_record(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_recipes_uninstall_removes_manifest_record(monkeypatch: pytest.MonkeyPatch) -> None:
     removed = {"called": False}
     recipe_path = Path("/tmp/x")
-    entry = PluginEntry(
+    entry = RecipeEntry(
         slug="x",
         folder="x",
         path=recipe_path,
@@ -264,10 +274,10 @@ def test_plugins_uninstall_removes_manifest_record(monkeypatch: pytest.MonkeyPat
         manifest_record={"trusted": True},
     )
 
-    monkeypatch.setattr("web2api.cli.discover_plugin_entries", lambda recipes_dir: [entry])
+    monkeypatch.setattr("web2api.cli.discover_recipe_entries", lambda recipes_dir: [entry])
     monkeypatch.setattr(
         "web2api.cli.load_manifest",
-        lambda recipes_dir: {"version": 1, "plugins": {"x": {"folder": "x"}}},
+        lambda recipes_dir: {"version": 1, "recipes": {"x": {"folder": "x"}}},
     )
     monkeypatch.setattr("web2api.cli.get_manifest_record", lambda manifest, slug: {"folder": "x"})
     monkeypatch.setattr("web2api.cli._confirm_or_exit", lambda prompt, yes: None)
@@ -279,43 +289,46 @@ def test_plugins_uninstall_removes_manifest_record(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("web2api.cli.remove_manifest_record", _fake_remove_manifest_record)
 
     runner = CliRunner()
-    result = runner.invoke(cli.app, ["plugins", "uninstall", "x", "--yes", "--keep-files"])
+    result = runner.invoke(cli.app, ["recipes", "uninstall", "x", "--yes", "--keep-files"])
 
     assert result.exit_code == 0
     assert removed["called"] is True
 
 
-def test_plugins_catalog_add_installs_from_catalog(
+def test_recipes_catalog_add_installs_from_catalog(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     called: dict[str, object] = {}
 
     monkeypatch.setattr(
-        "web2api.cli.load_catalog",
-        lambda path: {
-            "demo": {
-                "source": "./demo-plugin",
-                "ref": "v1.0.0",
-                "subdir": None,
-                "trusted": True,
-            }
+        "web2api.cli.resolve_catalog_recipes",
+        lambda **kwargs: {
+            "demo": CatalogRecipeSpec(
+                name="demo",
+                slug="demo",
+                source="./demo-plugin",
+                source_ref="v1.0.0",
+                source_subdir=None,
+                description=None,
+                trusted=True,
+            )
         },
     )
 
-    def _fake_add_plugin_from_source(**kwargs):
+    def _fake_add_recipe_from_source(**kwargs):
         called.update(kwargs)
         return "demo", "catalog"
 
-    monkeypatch.setattr("web2api.cli._add_plugin_from_source", _fake_add_plugin_from_source)
+    monkeypatch.setattr("web2api.cli._add_recipe_from_source", _fake_add_recipe_from_source)
 
     catalog_file = tmp_path / "catalog.yaml"
-    catalog_file.write_text("plugins: {}\n", encoding="utf-8")
+    catalog_file.write_text("recipes: {}\n", encoding="utf-8")
 
     runner = CliRunner()
     result = runner.invoke(
         cli.app,
-        ["plugins", "catalog", "add", "demo", "--catalog-file", str(catalog_file), "--yes"],
+        ["recipes", "catalog", "add", "demo", "--catalog-source", str(catalog_file), "--yes"],
     )
 
     assert result.exit_code == 0

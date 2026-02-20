@@ -329,6 +329,146 @@
         display: none;
       }
 
+      .manager {
+        margin-top: 1.2rem;
+        border: 1px solid rgba(17, 79, 85, 0.2);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.86);
+        box-shadow: var(--shadow-soft);
+        padding: 0.82rem;
+      }
+
+      .manager-top {
+        display: grid;
+        gap: 0.5rem;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+      }
+
+      .manager h2 {
+        margin: 0;
+        font-size: 1.2rem;
+        font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+      }
+
+      .manager-meta {
+        margin: 0.2rem 0 0;
+        color: #4f5f67;
+        font-size: 0.84rem;
+        line-height: 1.4;
+      }
+
+      .manager-status {
+        margin-top: 0.4rem;
+        min-height: 1.2rem;
+        color: #34444b;
+        font-size: 0.84rem;
+      }
+
+      .manager-status.is-error {
+        color: #8f1f10;
+      }
+
+      .manager-list {
+        margin-top: 0.68rem;
+        display: grid;
+        gap: 0.48rem;
+      }
+
+      .manager-row {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        padding: 0.6rem;
+        display: grid;
+        gap: 0.42rem;
+      }
+
+      .manager-title {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+      }
+
+      .manager-name {
+        font-weight: 600;
+      }
+
+      .manager-slug {
+        border: 1px solid rgba(17, 79, 85, 0.22);
+        border-radius: 999px;
+        padding: 0.08rem 0.36rem;
+        font-family: "Consolas", "SFMono-Regular", Menlo, monospace;
+        font-size: 0.72rem;
+        color: #1a5860;
+        background: rgba(17, 79, 85, 0.1);
+      }
+
+      .manager-badge {
+        border-radius: 999px;
+        border: 1px solid rgba(17, 79, 85, 0.24);
+        padding: 0.08rem 0.34rem;
+        font-size: 0.69rem;
+        color: #2f4149;
+        background: rgba(255, 255, 255, 0.9);
+      }
+
+      .manager-badge.active {
+        border-color: rgba(15, 120, 88, 0.35);
+        color: #11543f;
+        background: rgba(15, 120, 88, 0.12);
+      }
+
+      .manager-badge.disabled {
+        border-color: rgba(150, 100, 18, 0.4);
+        color: #70470b;
+        background: rgba(240, 170, 45, 0.2);
+      }
+
+      .manager-desc {
+        margin: 0;
+        color: #5a6b74;
+        font-size: 0.82rem;
+      }
+
+      .manager-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.34rem;
+      }
+
+      .manager-btn {
+        border: 1px solid rgba(17, 79, 85, 0.3);
+        border-radius: 7px;
+        background: #fff;
+        color: #234f56;
+        padding: 0.24rem 0.48rem;
+        font-size: 0.74rem;
+        cursor: pointer;
+      }
+
+      .manager-btn:hover {
+        border-color: rgba(17, 79, 85, 0.5);
+        background: rgba(17, 79, 85, 0.1);
+      }
+
+      .manager-btn.danger {
+        border-color: rgba(160, 35, 20, 0.36);
+        color: #7f2114;
+        background: rgba(160, 35, 20, 0.08);
+      }
+
+      .manager-btn.danger:hover {
+        border-color: rgba(160, 35, 20, 0.55);
+        background: rgba(160, 35, 20, 0.14);
+      }
+
+      .manager-btn:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
       @media (max-width: 980px) {
         .toolbar {
           grid-template-columns: 1fr;
@@ -384,8 +524,9 @@
         <span class="hero-tag">Live Catalog</span>
         <h1>Web2API Recipes</h1>
         <p class="subtitle">
-          Browse APIs discovered from <code>recipes/</code>, filter quickly, then open or copy
-          ready URLs. Endpoints labeled <code>q</code> require query input.
+          Browse installed API recipes, filter quickly, then open or copy ready URLs. Use the
+          repository section below to install and manage recipes. Endpoints labeled <code>q</code>
+          require query input.
         </p>
 
         <div class="toolbar">
@@ -477,99 +618,361 @@
       </p>
       {% else %}
       <div class="empty">
-        No recipe APIs found. Add a folder under <code>recipes/</code> and restart the service.
+        No recipe APIs are installed yet. Use the repository section below to install one.
       </div>
       {% endif %}
+
+      <section class="manager" id="repoManager">
+        <div class="manager-top">
+          <div>
+            <h2>Recipe Repository</h2>
+            <p class="manager-meta" id="managerSource">
+              Browse catalog recipes and manage installed ones.
+            </p>
+          </div>
+          <button class="manager-btn" id="managerReload" type="button">Refresh</button>
+        </div>
+        <p class="manager-status" id="managerStatus"></p>
+        <div class="manager-list" id="managerList"></div>
+      </section>
     </main>
 
     <script>
       (() => {
         const rows = Array.from(document.querySelectorAll(".row"));
-        if (rows.length === 0) {
-          return;
-        }
-
         const filterInput = document.getElementById("filterInput");
         const qOnlyToggle = document.getElementById("qOnlyToggle");
         const visibleSites = document.getElementById("visibleSites");
         const visibleEndpoints = document.getElementById("visibleEndpoints");
         const noMatches = document.getElementById("noMatches");
+        if (rows.length > 0 && filterInput && qOnlyToggle && visibleSites && visibleEndpoints && noMatches) {
+          const normalize = (value) => value.trim().toLowerCase();
 
-        const normalize = (value) => value.trim().toLowerCase();
+          const applyFilters = () => {
+            const term = normalize(filterInput.value || "");
+            const qOnly = qOnlyToggle.checked;
 
-        const applyFilters = () => {
-          const term = normalize(filterInput.value || "");
-          const qOnly = qOnlyToggle.checked;
+            let shownSites = 0;
+            let shownEndpoints = 0;
 
-          let shownSites = 0;
-          let shownEndpoints = 0;
+            rows.forEach((row) => {
+              const siteText = row.dataset.site || "";
+              const siteMatches = term === "" || siteText.includes(term);
 
-          rows.forEach((row) => {
-            const siteText = row.dataset.site || "";
-            const siteMatches = term === "" || siteText.includes(term);
+              const endpointItems = Array.from(row.querySelectorAll(".endpoint-item"));
+              const urlItems = Array.from(row.querySelectorAll(".url-item"));
 
-            const endpointItems = Array.from(row.querySelectorAll(".endpoint-item"));
-            const urlItems = Array.from(row.querySelectorAll(".url-item"));
+              let rowVisibleCount = 0;
 
-            let rowVisibleCount = 0;
+              endpointItems.forEach((endpointItem, index) => {
+                const endpointText = endpointItem.dataset.endpointText || "";
+                const requiresQuery = endpointItem.dataset.requiresQuery === "true";
 
-            endpointItems.forEach((endpointItem, index) => {
-              const endpointText = endpointItem.dataset.endpointText || "";
-              const requiresQuery = endpointItem.dataset.requiresQuery === "true";
+                const matchesToggle = !qOnly || requiresQuery;
+                const matchesTerm = term === "" || siteMatches || endpointText.includes(term);
+                const isVisible = matchesToggle && matchesTerm;
 
-              const matchesToggle = !qOnly || requiresQuery;
-              const matchesTerm = term === "" || siteMatches || endpointText.includes(term);
-              const isVisible = matchesToggle && matchesTerm;
+                endpointItem.classList.toggle("is-hidden", !isVisible);
+                if (urlItems[index]) {
+                  urlItems[index].classList.toggle("is-hidden", !isVisible);
+                }
 
-              endpointItem.classList.toggle("is-hidden", !isVisible);
-              if (urlItems[index]) {
-                urlItems[index].classList.toggle("is-hidden", !isVisible);
-              }
+                if (isVisible) {
+                  rowVisibleCount += 1;
+                }
+              });
 
-              if (isVisible) {
-                rowVisibleCount += 1;
+              const rowVisible = rowVisibleCount > 0;
+              row.classList.toggle("is-hidden", !rowVisible);
+
+              if (rowVisible) {
+                shownSites += 1;
+                shownEndpoints += rowVisibleCount;
               }
             });
 
-            const rowVisible = rowVisibleCount > 0;
-            row.classList.toggle("is-hidden", !rowVisible);
+            visibleSites.textContent = String(shownSites);
+            visibleEndpoints.textContent = String(shownEndpoints);
+            noMatches.classList.toggle("is-hidden", shownSites > 0);
+          };
 
-            if (rowVisible) {
-              shownSites += 1;
-              shownEndpoints += rowVisibleCount;
-            }
+          filterInput.addEventListener("input", applyFilters);
+          qOnlyToggle.addEventListener("change", applyFilters);
+
+          document.querySelectorAll(".copy-btn").forEach((button) => {
+            button.addEventListener("click", async () => {
+              const relative = button.dataset.url || "";
+              const absolute = `${window.location.origin}${relative}`;
+
+              try {
+                await navigator.clipboard.writeText(absolute);
+                const original = button.textContent;
+                button.textContent = "copied";
+                window.setTimeout(() => {
+                  button.textContent = original;
+                }, 1100);
+              } catch (_error) {
+                button.textContent = "failed";
+                window.setTimeout(() => {
+                  button.textContent = "copy";
+                }, 1100);
+              }
+            });
           });
 
-          visibleSites.textContent = String(shownSites);
-          visibleEndpoints.textContent = String(shownEndpoints);
-          noMatches.classList.toggle("is-hidden", shownSites > 0);
+          applyFilters();
+        }
+
+        const managerSource = document.getElementById("managerSource");
+        const managerStatus = document.getElementById("managerStatus");
+        const managerList = document.getElementById("managerList");
+        const managerReload = document.getElementById("managerReload");
+        if (!managerSource || !managerStatus || !managerList || !managerReload) {
+          return;
+        }
+
+        let busy = false;
+
+        const setStatus = (message, { error = false } = {}) => {
+          managerStatus.textContent = message;
+          managerStatus.classList.toggle("is-error", error);
         };
 
-        filterInput.addEventListener("input", applyFilters);
-        qOnlyToggle.addEventListener("change", applyFilters);
-
-        document.querySelectorAll(".copy-btn").forEach((button) => {
-          button.addEventListener("click", async () => {
-            const relative = button.dataset.url || "";
-            const absolute = `${window.location.origin}${relative}`;
-
-            try {
-              await navigator.clipboard.writeText(absolute);
-              const original = button.textContent;
-              button.textContent = "copied";
-              window.setTimeout(() => {
-                button.textContent = original;
-              }, 1100);
-            } catch (_error) {
-              button.textContent = "failed";
-              window.setTimeout(() => {
-                button.textContent = "copy";
-              }, 1100);
+        const readError = async (response) => {
+          try {
+            const payload = await response.json();
+            if (typeof payload.detail === "string" && payload.detail) {
+              return payload.detail;
             }
+            return JSON.stringify(payload);
+          } catch (_error) {
+            return `${response.status} ${response.statusText}`;
+          }
+        };
+
+        const actionButton = ({ label, onClick, danger = false }) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `manager-btn${danger ? " danger" : ""}`;
+          button.disabled = busy;
+          button.textContent = label;
+          button.addEventListener("click", onClick);
+          return button;
+        };
+
+        const runAction = async ({ url, label }) => {
+          if (busy) {
+            return;
+          }
+          busy = true;
+          setStatus(`${label}...`);
+          try {
+            const response = await fetch(url, { method: "POST" });
+            if (!response.ok) {
+              throw new Error(await readError(response));
+            }
+            setStatus(`${label} complete. Reloading...`);
+            window.location.reload();
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "request failed";
+            setStatus(message, { error: true });
+            busy = false;
+          }
+        };
+
+        const renderCatalog = (payload) => {
+          managerList.replaceChildren();
+          const source = payload.catalog_source || {};
+          const sourceParts = [source.source || "-"];
+          if (source.ref) {
+            sourceParts.push(`ref: ${source.ref}`);
+          }
+          if (source.path) {
+            sourceParts.push(`path: ${source.path}`);
+          }
+          managerSource.textContent = `Source: ${sourceParts.join(" · ")}`;
+
+          if (payload.catalog_error) {
+            setStatus(`Catalog unavailable: ${payload.catalog_error}`, { error: true });
+          }
+
+          const catalog = Array.isArray(payload.catalog) ? payload.catalog : [];
+          const installed = Array.isArray(payload.installed) ? payload.installed : [];
+          const catalogSlugs = new Set(catalog.map((entry) => String(entry.slug || "")));
+
+          const localOnlyInstalled = installed.filter((entry) => {
+            const slug = String(entry.slug || "");
+            return Boolean(entry.has_recipe) && slug !== "" && !catalogSlugs.has(slug);
           });
+
+          const renderRecipeRow = (entry, { catalogName = null } = {}) => {
+            const slugRaw = String(entry.slug || entry.name || "");
+            if (!slugRaw) {
+              return;
+            }
+            const installedValue = Boolean(entry.installed);
+            const managedValue = Boolean(entry.managed);
+            const enabledValue = Boolean(entry.enabled);
+            const originValue = String(entry.origin || (installedValue ? "unmanaged" : "catalog"));
+
+            const row = document.createElement("article");
+            row.className = "manager-row";
+
+            const title = document.createElement("div");
+            title.className = "manager-title";
+
+            const name = document.createElement("span");
+            name.className = "manager-name";
+            name.textContent = String(catalogName || entry.name || slugRaw);
+            title.append(name);
+
+            const slug = document.createElement("span");
+            slug.className = "manager-slug";
+            slug.textContent = slugRaw;
+            title.append(slug);
+
+            const trustBadge = document.createElement("span");
+            trustBadge.className = "manager-badge";
+            trustBadge.textContent = entry.trusted ? "trusted" : "untrusted";
+            title.append(trustBadge);
+
+            const originBadge = document.createElement("span");
+            originBadge.className = "manager-badge";
+            originBadge.textContent = `origin:${originValue}`;
+            title.append(originBadge);
+
+            if (installedValue) {
+              const stateBadge = document.createElement("span");
+              stateBadge.className = `manager-badge ${enabledValue ? "active" : "disabled"}`;
+              stateBadge.textContent = enabledValue ? "installed" : "installed/disabled";
+              title.append(stateBadge);
+            }
+
+            row.append(title);
+
+            const desc = document.createElement("p");
+            desc.className = "manager-desc";
+            desc.textContent = String(entry.description || "No description.");
+            row.append(desc);
+
+            const actions = document.createElement("div");
+            actions.className = "manager-actions";
+            const slugValue = encodeURIComponent(slugRaw);
+            const nameValue = encodeURIComponent(String(catalogName || entry.name || ""));
+
+            if (!installedValue) {
+              actions.append(
+                actionButton({
+                  label: "Install",
+                  onClick: () =>
+                    runAction({
+                      url: `/api/recipes/manage/install/${nameValue}`,
+                      label: `Installing ${entry.slug || entry.name}`,
+                    }),
+                })
+              );
+            } else {
+              actions.append(
+                actionButton({
+                  label: enabledValue ? "Disable" : "Enable",
+                  onClick: () =>
+                    runAction({
+                      url: enabledValue
+                        ? `/api/recipes/manage/disable/${slugValue}`
+                        : `/api/recipes/manage/enable/${slugValue}`,
+                      label: `${enabledValue ? "Disabling" : "Enabling"} ${slugRaw}`,
+                    }),
+                })
+              );
+              if (managedValue) {
+                actions.append(
+                  actionButton({
+                    label: "Update",
+                    onClick: () =>
+                      runAction({
+                        url: `/api/recipes/manage/update/${slugValue}`,
+                        label: `Updating ${slugRaw}`,
+                      }),
+                  })
+                );
+              }
+              actions.append(
+                actionButton({
+                  label: managedValue ? "Uninstall" : "Uninstall (force)",
+                  danger: true,
+                  onClick: () =>
+                    runAction({
+                      url: managedValue
+                        ? `/api/recipes/manage/uninstall/${slugValue}`
+                        : `/api/recipes/manage/uninstall/${slugValue}?force=true`,
+                      label: `Uninstalling ${slugRaw}`,
+                    }),
+                })
+              );
+            }
+
+            row.append(actions);
+            managerList.append(row);
+          };
+
+          if (catalog.length === 0 && localOnlyInstalled.length === 0) {
+            const empty = document.createElement("p");
+            empty.className = "manager-desc";
+            empty.textContent = "No catalog recipes found and no local recipes installed.";
+            managerList.append(empty);
+            return;
+          }
+
+          if (!payload.catalog_error) {
+            setStatus(
+              `${catalog.length} catalog recipes loaded, ${localOnlyInstalled.length} local-only installed.`
+            );
+          }
+
+          catalog.forEach((entry) => {
+            renderRecipeRow(entry, { catalogName: entry.name });
+          });
+
+          localOnlyInstalled.forEach((entry) => {
+            renderRecipeRow(
+              {
+                name: entry.slug,
+                slug: entry.slug,
+                description: "Installed locally and not listed in current catalog source.",
+                trusted: entry.trusted,
+                installed: true,
+                enabled: entry.enabled,
+                managed: entry.managed,
+                origin: entry.origin,
+              },
+              { catalogName: null }
+            );
+          });
+        };
+
+        const loadCatalog = async () => {
+          setStatus("Loading catalog...");
+          try {
+            const response = await fetch("/api/recipes/manage");
+            if (!response.ok) {
+              throw new Error(await readError(response));
+            }
+            const payload = await response.json();
+            renderCatalog(payload);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "catalog load failed";
+            setStatus(message, { error: true });
+          }
+        };
+
+        managerReload.addEventListener("click", () => {
+          if (busy) {
+            return;
+          }
+          void loadCatalog();
         });
 
-        applyFilters();
+        void loadCatalog();
       })();
     </script>
   </body>

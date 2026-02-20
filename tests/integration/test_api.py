@@ -362,3 +362,125 @@ async def test_response_cache_serves_fresh_and_stale_results(
 
             await asyncio.sleep(0.15)
             assert call_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_recipe_management_api_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recipes_dir = tmp_path / "active-recipes"
+    catalog_root = tmp_path / "catalog-src"
+    _write_recipe(catalog_root / "recipes", "gamma")
+
+    catalog_file = catalog_root / "catalog.yaml"
+    catalog_file.parent.mkdir(parents=True, exist_ok=True)
+    catalog_file.write_text(
+        yaml.safe_dump(
+            {
+                "recipes": {
+                    "gamma": {
+                        "source": "./recipes/gamma",
+                        "trusted": True,
+                        "description": "Gamma recipe",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("WEB2API_RECIPE_CATALOG_SOURCE", str(catalog_file))
+    monkeypatch.delenv("WEB2API_RECIPE_CATALOG_REF", raising=False)
+    monkeypatch.delenv("WEB2API_RECIPE_CATALOG_PATH", raising=False)
+
+    fake_pool = FakePool()
+    app = create_app(recipes_dir=recipes_dir, pool=fake_pool)
+
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            manage_before = await client.get("/api/recipes/manage")
+            assert manage_before.status_code == 200
+            payload_before = manage_before.json()
+            assert payload_before["catalog_error"] is None
+            assert payload_before["catalog"][0]["name"] == "gamma"
+            assert payload_before["catalog"][0]["installed"] is False
+
+            install_resp = await client.post("/api/recipes/manage/install/gamma")
+            assert install_resp.status_code == 200
+            assert install_resp.json()["slug"] == "gamma"
+
+            sites_after_install = await client.get("/api/sites")
+            assert sites_after_install.status_code == 200
+            slugs_after_install = {site["slug"] for site in sites_after_install.json()}
+            assert "gamma" in slugs_after_install
+
+            disable_resp = await client.post("/api/recipes/manage/disable/gamma")
+            assert disable_resp.status_code == 200
+
+            manage_after_disable = await client.get("/api/recipes/manage")
+            assert manage_after_disable.status_code == 200
+            gamma_catalog = next(
+                item for item in manage_after_disable.json()["catalog"] if item["name"] == "gamma"
+            )
+            assert gamma_catalog["installed"] is True
+            assert gamma_catalog["enabled"] is False
+
+            enable_resp = await client.post("/api/recipes/manage/enable/gamma")
+            assert enable_resp.status_code == 200
+
+            update_resp = await client.post("/api/recipes/manage/update/gamma")
+            assert update_resp.status_code == 200
+            assert update_resp.json()["slug"] == "gamma"
+
+            uninstall_resp = await client.post("/api/recipes/manage/uninstall/gamma")
+            assert uninstall_resp.status_code == 200
+
+            sites_after_uninstall = await client.get("/api/sites")
+            assert sites_after_uninstall.status_code == 200
+            slugs_after_uninstall = {site["slug"] for site in sites_after_uninstall.json()}
+            assert "gamma" not in slugs_after_uninstall
+
+
+@pytest.mark.asyncio
+async def test_recipe_management_uninstall_force_for_unmanaged_local(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recipes_dir = tmp_path / "active-recipes"
+    _write_recipe(recipes_dir, "local-only")
+
+    catalog_file = tmp_path / "catalog.yaml"
+    catalog_file.write_text(yaml.safe_dump({"recipes": {}}), encoding="utf-8")
+
+    monkeypatch.setenv("WEB2API_RECIPE_CATALOG_SOURCE", str(catalog_file))
+    monkeypatch.delenv("WEB2API_RECIPE_CATALOG_REF", raising=False)
+    monkeypatch.delenv("WEB2API_RECIPE_CATALOG_PATH", raising=False)
+
+    fake_pool = FakePool()
+    app = create_app(recipes_dir=recipes_dir, pool=fake_pool)
+
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            manage_resp = await client.get("/api/recipes/manage")
+            assert manage_resp.status_code == 200
+            installed = manage_resp.json()["installed"]
+            local_entry = next(item for item in installed if item["slug"] == "local-only")
+            assert local_entry["managed"] is False
+            assert local_entry["origin"] == "unmanaged"
+
+            uninstall_without_force = await client.post("/api/recipes/manage/uninstall/local-only")
+            assert uninstall_without_force.status_code == 400
+
+            uninstall_force = await client.post(
+                "/api/recipes/manage/uninstall/local-only?force=true"
+            )
+            assert uninstall_force.status_code == 200
+            assert uninstall_force.json()["forced"] is True
+
+            sites_after_uninstall = await client.get("/api/sites")
+            assert sites_after_uninstall.status_code == 200
+            slugs = {site["slug"] for site in sites_after_uninstall.json()}
+            assert "local-only" not in slugs

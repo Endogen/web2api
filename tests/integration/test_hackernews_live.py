@@ -47,8 +47,15 @@ def _assert_live_result_or_skip(response: ApiResponse, *, endpoint: str) -> None
     reason=f"Set {LIVE_HN_ENV}=1 to run live Hacker News integration checks.",
 )
 async def test_hackernews_recipe_live_scrape() -> None:
+    recipes_root = Path(os.getenv("WEB2API_LIVE_RECIPES_DIR", "recipes"))
+    if not recipes_root.exists():
+        pytest.skip(
+            "Set WEB2API_LIVE_RECIPES_DIR to a recipes checkout "
+            "(for example web2api-recipes/recipes)."
+        )
+
     registry = RecipeRegistry()
-    registry.discover(Path("recipes"))
+    registry.discover(recipes_root)
     recipe = registry.get("hackernews")
     assert recipe is not None
 
