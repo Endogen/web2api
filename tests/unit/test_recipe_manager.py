@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from web2api.recipe_manager import (
     discover_recipe_entries,
     enable_recipe,
     find_recipe_entry,
+    install_recipe_from_source,
     load_catalog,
     load_manifest,
     record_recipe_install,
@@ -229,3 +231,122 @@ def test_resolve_catalog_recipes_from_local_file(tmp_path: Path) -> None:
     assert specs["demo"].slug == "demo"
     assert specs["demo"].source == str(source_recipe.resolve())
     assert specs["demo"].trusted is True
+
+
+def test_resolve_catalog_recipes_sparse_checkout_for_remote_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+    repo_path: Path | None = None
+
+    def _fake_run(command, check: bool, text: bool, **kwargs):  # noqa: ANN001
+        del check, text, kwargs
+        nonlocal repo_path
+        command_list = [str(part) for part in command]
+        commands.append(command_list)
+        if command_list[:3] == ["git", "init", "--quiet"]:
+            repo_path = Path(command_list[3])
+            repo_path.mkdir(parents=True, exist_ok=True)
+        elif repo_path is not None and command_list[:3] == ["git", "-C", str(repo_path)]:
+            if command_list[3:6] == ["checkout", "--quiet", "FETCH_HEAD"]:
+                (repo_path / "catalog.yaml").write_text(
+                    yaml.safe_dump(
+                        {
+                            "recipes": {
+                                "demo": {
+                                    "source": "recipes/demo",
+                                    "description": "demo",
+                                }
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+        return subprocess.CompletedProcess(command_list, 0)
+
+    monkeypatch.setattr("web2api.recipe_manager.subprocess.run", _fake_run)
+
+    specs = resolve_catalog_recipes(catalog_source="https://example.com/catalog.git")
+
+    assert "demo" in specs
+    assert specs["demo"].source == "https://example.com/catalog.git"
+    assert specs["demo"].source_subdir == "recipes/demo"
+
+    assert any(
+        command[:9]
+        == [
+            "git",
+            "-C",
+            str(repo_path),
+            "fetch",
+            "--quiet",
+            "--depth",
+            "1",
+            "--filter=blob:none",
+            "origin",
+        ]
+        for command in commands
+        if repo_path is not None
+    )
+    assert any(
+        command
+        == [
+            "git",
+            "-C",
+            str(repo_path),
+            "sparse-checkout",
+            "set",
+            "catalog.yaml",
+        ]
+        for command in commands
+        if repo_path is not None
+    )
+
+
+def test_install_recipe_from_source_sparse_checkout_for_subdir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+    repo_path: Path | None = None
+
+    def _fake_run(command, check: bool, text: bool, **kwargs):  # noqa: ANN001
+        del check, text, kwargs
+        nonlocal repo_path
+        command_list = [str(part) for part in command]
+        commands.append(command_list)
+        if command_list[:3] == ["git", "init", "--quiet"]:
+            repo_path = Path(command_list[3])
+            repo_path.mkdir(parents=True, exist_ok=True)
+        elif repo_path is not None and command_list[:3] == ["git", "-C", str(repo_path)]:
+            if command_list[3:6] == ["checkout", "--quiet", "FETCH_HEAD"]:
+                source_recipe_dir = repo_path / "recipes" / "demo"
+                _write_recipe(source_recipe_dir)
+        return subprocess.CompletedProcess(command_list, 0)
+
+    monkeypatch.setattr("web2api.recipe_manager.subprocess.run", _fake_run)
+
+    slug, source_type = install_recipe_from_source(
+        source="https://example.com/recipes.git",
+        recipes_dir=tmp_path / "recipes",
+        source_ref=None,
+        source_subdir="recipes/demo",
+        trusted=True,
+    )
+
+    assert slug == "demo"
+    assert source_type == "git"
+    assert (tmp_path / "recipes" / "demo" / "recipe.yaml").exists()
+    assert any(
+        command
+        == [
+            "git",
+            "-C",
+            str(repo_path),
+            "sparse-checkout",
+            "set",
+            "recipes/demo",
+        ]
+        for command in commands
+        if repo_path is not None
+    )

@@ -408,7 +408,12 @@ def resolve_catalog_recipes(
             )
         return resolved
 
-    with checkout_source(source_value, source_ref=ref_value, source_type="git") as source_root:
+    with checkout_source(
+        source_value,
+        source_ref=ref_value,
+        source_type="git",
+        sparse_paths=[path_value],
+    ) as source_root:
         catalog_file = source_root / path_value
         catalog = load_catalog(catalog_file)
 
@@ -684,6 +689,7 @@ def checkout_source(
     *,
     source_ref: str | None = None,
     source_type: SourceType | None = None,
+    sparse_paths: list[str] | None = None,
 ) -> Path:
     """Yield a local checkout path for a source value."""
     resolved_type = source_type or resolve_source_type(source)
@@ -691,16 +697,91 @@ def checkout_source(
         yield Path(source).expanduser().resolve()
         return
 
+    normalized_sparse_paths: list[str] = []
+    if sparse_paths is not None:
+        normalized_sparse_paths = [
+            path.strip()
+            for path in sparse_paths
+            if isinstance(path, str) and path.strip()
+        ]
+
     with tempfile.TemporaryDirectory(prefix="web2api-recipe-src-") as tmp_dir:
         target = Path(tmp_dir) / "repo"
-        clone_cmd = ["git", "clone", source, str(target)]
-        subprocess.run(clone_cmd, check=True, text=True)
-        if source_ref is not None:
-            subprocess.run(
-                ["git", "-C", str(target), "checkout", source_ref],
-                check=True,
-                text=True,
-            )
+        if normalized_sparse_paths:
+            try:
+                subprocess.run(
+                    ["git", "init", "--quiet", str(target)],
+                    check=True,
+                    text=True,
+                )
+                subprocess.run(
+                    ["git", "-C", str(target), "remote", "add", "origin", source],
+                    check=True,
+                    text=True,
+                )
+                fetch_ref = source_ref or "HEAD"
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(target),
+                        "fetch",
+                        "--quiet",
+                        "--depth",
+                        "1",
+                        "--filter=blob:none",
+                        "origin",
+                        fetch_ref,
+                    ],
+                    check=True,
+                    text=True,
+                )
+                subprocess.run(
+                    ["git", "-C", str(target), "sparse-checkout", "init", "--cone"],
+                    check=True,
+                    text=True,
+                )
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(target),
+                        "sparse-checkout",
+                        "set",
+                        *normalized_sparse_paths,
+                    ],
+                    check=True,
+                    text=True,
+                )
+                subprocess.run(
+                    ["git", "-C", str(target), "checkout", "--quiet", "FETCH_HEAD"],
+                    check=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError:
+                logger.info(
+                    "Sparse checkout failed for %s; falling back to full clone.",
+                    source,
+                )
+                if target.exists():
+                    shutil.rmtree(target)
+                clone_cmd = ["git", "clone", "--quiet", source, str(target)]
+                subprocess.run(clone_cmd, check=True, text=True)
+                if source_ref is not None:
+                    subprocess.run(
+                        ["git", "-C", str(target), "checkout", "--quiet", source_ref],
+                        check=True,
+                        text=True,
+                    )
+        else:
+            clone_cmd = ["git", "clone", "--quiet", source, str(target)]
+            subprocess.run(clone_cmd, check=True, text=True)
+            if source_ref is not None:
+                subprocess.run(
+                    ["git", "-C", str(target), "checkout", "--quiet", source_ref],
+                    check=True,
+                    text=True,
+                )
         yield target
 
 
@@ -778,11 +859,17 @@ def install_recipe_from_source(
     """Install a recipe from source path/git and persist manifest record."""
     resolved_source_type = resolve_source_type(source)
     manifest_source_type = record_source_type or resolved_source_type
+    sparse_paths = (
+        [source_subdir]
+        if resolved_source_type == "git" and source_subdir
+        else None
+    )
 
     with checkout_source(
         source,
         source_ref=source_ref,
         source_type=resolved_source_type,
+        sparse_paths=sparse_paths,
     ) as source_root:
         source_recipe_dir = resolve_recipe_source_dir(source_root, source_subdir)
         source_slug = load_source_recipe_slug(source_recipe_dir)
