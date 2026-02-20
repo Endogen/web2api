@@ -13,9 +13,11 @@ import yaml
 
 from web2api.config import RecipeConfig, parse_recipe_config
 from web2api.logging_utils import log_event
+from web2api.plugin import PluginConfig, evaluate_plugin_status, parse_plugin_config
 from web2api.scraper import BaseScraper
 
 logger = logging.getLogger(__name__)
+_DISABLED_MARKER = ".disabled"
 
 
 @dataclass(slots=True)
@@ -25,14 +27,22 @@ class Recipe:
     config: RecipeConfig
     scraper: BaseScraper | None
     path: Path
+    plugin: PluginConfig | None = None
 
 
 class RecipeRegistry:
     """Registry of recipe plugins discovered from the filesystem."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        app_version: str | None = None,
+        enforce_plugin_compatibility: bool = False,
+    ) -> None:
         """Initialize an empty in-memory recipe registry."""
         self._recipes: dict[str, Recipe] = {}
+        self._app_version = app_version
+        self._enforce_plugin_compatibility = enforce_plugin_compatibility
 
     def discover(self, recipes_dir: Path) -> None:
         """Scan ``recipes_dir`` and register discovered recipes."""
@@ -49,6 +59,14 @@ class RecipeRegistry:
 
         log_event(logger, logging.INFO, "registry.discover_started", recipes_dir=str(recipes_dir))
         for recipe_dir in sorted(path for path in recipes_dir.iterdir() if path.is_dir()):
+            if (recipe_dir / _DISABLED_MARKER).exists():
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "registry.recipe_disabled",
+                    recipe_dir=recipe_dir.name,
+                )
+                continue
             try:
                 recipe = self._load_recipe(recipe_dir)
             except Exception as exc:  # noqa: BLE001
@@ -64,6 +82,39 @@ class RecipeRegistry:
 
             if recipe is None:
                 continue
+
+            if recipe.plugin is not None:
+                status = evaluate_plugin_status(
+                    recipe.plugin,
+                    current_web2api_version=self._app_version,
+                )
+                compatibility = status.get("compatibility", {})
+                is_compatible = (
+                    compatibility.get("is_compatible")
+                    if isinstance(compatibility, dict)
+                    else None
+                )
+                if is_compatible is False:
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "registry.recipe_incompatible",
+                        recipe_dir=recipe_dir.name,
+                        slug=recipe.config.slug,
+                        app_version=self._app_version,
+                        min=compatibility.get("min") if isinstance(compatibility, dict) else None,
+                        max=compatibility.get("max") if isinstance(compatibility, dict) else None,
+                    )
+                    if self._enforce_plugin_compatibility:
+                        logger.warning(
+                            "Skipping recipe '%s': incompatible plugin web2api version bounds",
+                            recipe_dir.name,
+                        )
+                        continue
+                    logger.warning(
+                        "Recipe '%s' has incompatible plugin web2api version bounds",
+                        recipe_dir.name,
+                    )
 
             slug = recipe.config.slug
             if slug in self._recipes:
@@ -122,7 +173,22 @@ class RecipeRegistry:
         recipe_data = {str(key): value for key, value in raw_data.items()}
         config = parse_recipe_config(recipe_data, folder_name=recipe_dir.name)
         scraper = self._load_scraper(recipe_dir)
-        return Recipe(config=config, scraper=scraper, path=recipe_dir)
+        plugin = self._load_plugin(recipe_dir)
+        return Recipe(config=config, scraper=scraper, path=recipe_dir, plugin=plugin)
+
+    def _load_plugin(self, recipe_dir: Path) -> PluginConfig | None:
+        plugin_config_path = recipe_dir / "plugin.yaml"
+        if not plugin_config_path.exists():
+            return None
+
+        raw_data = yaml.safe_load(plugin_config_path.read_text(encoding="utf-8"))
+        if raw_data is None:
+            raise ValueError(f"{plugin_config_path} is empty")
+        if not isinstance(raw_data, dict):
+            raise ValueError(f"{plugin_config_path} must contain a YAML mapping")
+
+        plugin_data = {str(key): value for key, value in raw_data.items()}
+        return parse_plugin_config(plugin_data)
 
     def _load_scraper(self, recipe_dir: Path) -> BaseScraper | None:
         scraper_path = recipe_dir / "scraper.py"

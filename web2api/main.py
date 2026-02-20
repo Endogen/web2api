@@ -16,6 +16,7 @@ from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
+from web2api import __version__
 from web2api.cache import CacheKey, ResponseCache
 from web2api.engine import scrape
 from web2api.logging_utils import (
@@ -25,6 +26,8 @@ from web2api.logging_utils import (
     reset_request_id,
     set_request_id,
 )
+from web2api.plugin import build_plugin_payload
+from web2api.plugin_manager import default_recipes_dir as default_plugin_recipes_dir
 from web2api.pool import BrowserPool
 from web2api.registry import Recipe, RecipeRegistry
 from web2api.schemas import (
@@ -41,11 +44,12 @@ TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "tem
 logger = logging.getLogger(__name__)
 _EXTRA_PARAM_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 _MAX_EXTRA_PARAM_VALUE_LENGTH = 512
+APP_VERSION = __version__
 
 
 def _default_recipes_dir() -> Path:
     """Return the default recipes directory path."""
-    return Path(__file__).resolve().parent.parent / "recipes"
+    return default_plugin_recipes_dir()
 
 
 def _env_bool(name: str, *, default: bool) -> bool:
@@ -72,6 +76,12 @@ def _status_code_for_error(error: ErrorResponse | None) -> int:
 def _site_payload(recipe: Recipe) -> dict[str, Any]:
     """Build the site metadata payload returned by discovery endpoints."""
     config = recipe.config
+    plugin_payload = None
+    if recipe.plugin is not None:
+        plugin_payload = build_plugin_payload(
+            recipe.plugin,
+            current_web2api_version=APP_VERSION,
+        )
     endpoints_info: list[dict[str, Any]] = []
     for name, ep_config in config.endpoints.items():
         endpoints_info.append({
@@ -86,6 +96,7 @@ def _site_payload(recipe: Recipe) -> dict[str, Any]:
         "description": config.description,
         "base_url": config.base_url,
         "endpoints": endpoints_info,
+        "plugin": plugin_payload,
     }
 
 
@@ -260,7 +271,13 @@ def create_app(
         if scrape_timeout is not None
         else float(os.environ.get("SCRAPE_TIMEOUT", "30"))
     )
-    recipe_registry = registry or RecipeRegistry()
+    recipe_registry = registry or RecipeRegistry(
+        app_version=APP_VERSION,
+        enforce_plugin_compatibility=_env_bool(
+            "PLUGIN_ENFORCE_COMPATIBILITY",
+            default=False,
+        ),
+    )
     effective_recipes_dir = recipes_dir
     if effective_recipes_dir is None:
         env_recipes = os.environ.get("RECIPES_DIR")
@@ -290,7 +307,7 @@ def create_app(
     app = FastAPI(
         title="Web2API",
         summary="Turn websites into REST APIs by scraping them live with Playwright.",
-        version="0.2.0",
+        version=APP_VERSION,
         lifespan=lifespan,
     )
 

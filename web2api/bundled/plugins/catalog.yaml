@@ -1,0 +1,15 @@
+plugins:
+  hackernews:
+    description: "Built-in Hacker News recipe."
+    source: "../recipes/hackernews"
+    trusted: true
+
+  deepl:
+    description: "Built-in DeepL translation recipe."
+    source: "../recipes/deepl"
+    trusted: true
+
+  x:
+    description: "Built-in X/Twitter recipe (requires bird CLI and auth env vars)."
+    source: "../recipes/x"
+    trusted: true

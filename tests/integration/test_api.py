@@ -51,6 +51,7 @@ def _write_recipe(
     recipes_dir: Path,
     slug: str,
     endpoints: dict[str, dict] | None = None,
+    plugin: dict[str, object] | None = None,
 ) -> None:
     if endpoints is None:
         endpoints = {
@@ -75,6 +76,11 @@ def _write_recipe(
         ),
         encoding="utf-8",
     )
+    if plugin is not None:
+        (recipe_dir / "plugin.yaml").write_text(
+            yaml.safe_dump(plugin),
+            encoding="utf-8",
+        )
 
 
 def _success_response(
@@ -147,20 +153,31 @@ async def test_api_routes_and_index(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     recipes_dir = tmp_path / "recipes"
+    missing_env = "WEB2API_TEST_ALPHA_TOKEN_UNLIKELY"
+    monkeypatch.delenv(missing_env, raising=False)
 
-    _write_recipe(recipes_dir, "alpha", endpoints={
-        "read": {
-            "url": "https://example.com/items?page={page}",
-            "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
-            "pagination": {"type": "page_param", "param": "page"},
+    _write_recipe(
+        recipes_dir,
+        "alpha",
+        endpoints={
+            "read": {
+                "url": "https://example.com/items?page={page}",
+                "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
+                "pagination": {"type": "page_param", "param": "page"},
+            },
+            "search": {
+                "url": "https://example.com/search?q={query}&page={page}",
+                "requires_query": True,
+                "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
+                "pagination": {"type": "page_param", "param": "page"},
+            },
         },
-        "search": {
-            "url": "https://example.com/search?q={query}&page={page}",
-            "requires_query": True,
-            "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
-            "pagination": {"type": "page_param", "param": "page"},
+        plugin={
+            "version": "1.0.0",
+            "requires_env": [missing_env],
+            "dependencies": {"commands": ["missing-web2api-plugin-command"]},
         },
-    })
+    )
     _write_recipe(recipes_dir, "beta")  # read only
 
     async def fake_scrape(
@@ -251,6 +268,16 @@ async def test_api_routes_and_index(
                 alpha_site = next(s for s in sites_resp.json() if s["slug"] == "alpha")
                 ep_names = {ep["name"] for ep in alpha_site["endpoints"]}
                 assert ep_names == {"read", "search"}
+                assert alpha_site["plugin"]["version"] == "1.0.0"
+                assert alpha_site["plugin"]["status"]["ready"] is False
+                assert missing_env in alpha_site["plugin"]["status"]["checks"]["env"]["missing"]
+                assert (
+                    "missing-web2api-plugin-command"
+                    in alpha_site["plugin"]["status"]["checks"]["commands"]["missing"]
+                )
+
+                beta_site = next(s for s in sites_resp.json() if s["slug"] == "beta")
+                assert beta_site["plugin"] is None
 
                 # Health check
                 health_resp = await client.get("/health")

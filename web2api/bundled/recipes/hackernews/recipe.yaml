@@ -1,0 +1,97 @@
+name: "Hacker News"
+slug: "hackernews"
+base_url: "https://news.ycombinator.com"
+description: "Hacker News front page stories and search results"
+endpoints:
+  read:
+    description: "Front page stories"
+    url: "https://news.ycombinator.com/news?p={page}"
+    actions:
+      - type: wait
+        selector: "tr.athing"
+        timeout: 10000
+    items:
+      container: "tr.athing"
+      fields:
+        title:
+          selector: ".titleline > a"
+          attribute: "text"
+        url:
+          selector: ".titleline > a"
+          attribute: "href"
+          transform: "absolute_url"
+        score:
+          selector: ".score"
+          context: "next_sibling"
+          attribute: "text"
+          transform: "regex_int"
+          optional: true
+        author:
+          selector: ".hnuser"
+          context: "next_sibling"
+          attribute: "text"
+          optional: true
+        comment_count:
+          selector: "a[href^='item?id=']:last-child"
+          context: "next_sibling"
+          attribute: "text"
+          transform: "regex_int"
+          optional: true
+        time_ago:
+          selector: ".age"
+          context: "next_sibling"
+          attribute: "text"
+          optional: true
+        id:
+          selector: ""
+          attribute: "id"
+    pagination:
+      type: "page_param"
+      param: "p"
+      start: 1
+
+  search:
+    description: "Search stories via Algolia"
+    requires_query: true
+    url: "https://hn.algolia.com/?q={query}&page={page_zero}"
+    actions:
+      - type: wait
+        selector: ".Story"
+        timeout: 15000
+    items:
+      container: ".Story"
+      fields:
+        title:
+          selector: ".Story_title a:first-child"
+          attribute: "text"
+        url:
+          selector: ".Story_title a:first-child"
+          attribute: "href"
+          transform: "absolute_url"
+        score:
+          selector: ".Story_meta span:first-child"
+          attribute: "text"
+          transform: "regex_int"
+          optional: true
+        author:
+          selector: ".Story_meta a[href^='https://news.ycombinator.com/user']"
+          attribute: "text"
+          optional: true
+        comment_count:
+          selector: ".Story_meta a[href*='item?id=']"
+          attribute: "text"
+          transform: "regex_int"
+          optional: true
+        time_ago:
+          selector: ".Story_meta span[title]"
+          attribute: "text"
+          optional: true
+        id:
+          selector: ".Story_meta a[href*='item?id=']"
+          attribute: "href"
+          transform: "regex_int"
+          optional: true
+    pagination:
+      type: "page_param"
+      param: "page"
+      start: 0

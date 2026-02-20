@@ -53,6 +53,7 @@ def test_discovery_loads_valid_recipe(tmp_path: Path) -> None:
     assert recipe is not None
     assert recipe.path == recipes_dir / "valid"
     assert recipe.scraper is None
+    assert recipe.plugin is None
 
 
 def test_discovery_skips_invalid_recipe(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -135,3 +136,93 @@ def test_discovery_loads_custom_scraper(tmp_path: Path) -> None:
     assert recipe.scraper is not None
     assert recipe.scraper.supports("read") is True
     assert recipe.scraper.supports("search") is False
+
+
+def test_discovery_loads_plugin_metadata(tmp_path: Path) -> None:
+    recipes_dir = tmp_path / "recipes"
+    plugin_dir = recipes_dir / "plugin-site"
+    _write_recipe(plugin_dir)
+    (plugin_dir / "plugin.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "version": "1.0.0",
+                "web2api": {"min": "0.2.0"},
+                "requires_env": ["PLUGIN_SITE_TOKEN"],
+                "dependencies": {
+                    "commands": ["bird"],
+                    "python": ["httpx"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    registry = RecipeRegistry()
+    registry.discover(recipes_dir)
+
+    recipe = registry.get("plugin-site")
+    assert recipe is not None
+    assert recipe.plugin is not None
+    assert recipe.plugin.version == "1.0.0"
+    assert recipe.plugin.requires_env == ["PLUGIN_SITE_TOKEN"]
+    assert recipe.plugin.dependencies.commands == ["bird"]
+    assert recipe.plugin.dependencies.python_packages == ["httpx"]
+
+
+def test_discovery_skips_recipe_with_invalid_plugin(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    recipes_dir = tmp_path / "recipes"
+    _write_recipe(recipes_dir / "valid")
+    broken_dir = recipes_dir / "broken-plugin"
+    _write_recipe(broken_dir)
+    (broken_dir / "plugin.yaml").write_text(
+        yaml.safe_dump({"version": "1.0.0", "requires_env": ["bad-name"]}),
+        encoding="utf-8",
+    )
+
+    registry = RecipeRegistry()
+    with caplog.at_level(logging.WARNING):
+        registry.discover(recipes_dir)
+
+    assert registry.count == 1
+    assert registry.get("valid") is not None
+    assert registry.get("broken-plugin") is None
+    assert any("Skipping invalid recipe 'broken-plugin'" in message for message in caplog.messages)
+
+
+def test_discovery_skips_disabled_recipe(tmp_path: Path) -> None:
+    recipes_dir = tmp_path / "recipes"
+    enabled_dir = recipes_dir / "enabled"
+    disabled_dir = recipes_dir / "disabled"
+    _write_recipe(enabled_dir)
+    _write_recipe(disabled_dir)
+    (disabled_dir / ".disabled").write_text("disabled by test\n", encoding="utf-8")
+
+    registry = RecipeRegistry()
+    registry.discover(recipes_dir)
+
+    assert registry.get("enabled") is not None
+    assert registry.get("disabled") is None
+    assert registry.count == 1
+
+
+def test_discovery_enforces_plugin_compatibility_when_strict(tmp_path: Path) -> None:
+    recipes_dir = tmp_path / "recipes"
+    incompatible_dir = recipes_dir / "incompatible"
+    _write_recipe(incompatible_dir)
+    (incompatible_dir / "plugin.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "version": "1.0.0",
+                "web2api": {"min": "9.9.9"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    registry = RecipeRegistry(app_version="0.2.0", enforce_plugin_compatibility=True)
+    registry.discover(recipes_dir)
+
+    assert registry.count == 0
+    assert registry.get("incompatible") is None

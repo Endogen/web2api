@@ -1,0 +1,33 @@
+name: "DeepL Translator"
+slug: "deepl"
+base_url: "https://www.deepl.com"
+description: "Translate text between German and English using DeepL"
+endpoints:
+  de-en:
+    description: "German to English"
+    requires_query: true
+    url: "https://www.deepl.com/en/translator#de/en/"
+    items:
+      container: "d-textarea"
+      fields:
+        text:
+          selector: ""
+          attribute: "text"
+    pagination:
+      type: "page_param"
+      param: "p"
+      start: 1
+  en-de:
+    description: "English to German"
+    requires_query: true
+    url: "https://www.deepl.com/en/translator#en/de/"
+    items:
+      container: "d-textarea"
+      fields:
+        text:
+          selector: ""
+          attribute: "text"
+    pagination:
+      type: "page_param"
+      param: "p"
+      start: 1
