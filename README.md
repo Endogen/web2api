@@ -29,9 +29,44 @@ for optional dependency/runtime metadata inside a recipe.
 - **Unified JSON response schema** across all recipes and endpoints
 - **Docker deployment** with auto-restart
 
+## Quickstart (Local)
+
+```bash
+git clone https://github.com/Endogen/web2api.git
+cd web2api
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+playwright install --with-deps chromium
+```
+
+Start the service:
+
+```bash
+uvicorn web2api.main:app --host 0.0.0.0 --port 8010
+```
+
+Install recipes (in a separate terminal):
+
+```bash
+web2api recipes catalog list
+web2api recipes catalog add hackernews --yes
+```
+
+Service: `http://localhost:8010`
+
+### Verify
+
+```bash
+curl -s http://localhost:8010/health | jq
+curl -s http://localhost:8010/api/sites | jq
+```
+
 ## Quickstart (Docker)
 
 ```bash
+git clone https://github.com/Endogen/web2api.git
+cd web2api
 docker compose up --build -d
 ```
 
@@ -44,35 +79,15 @@ curl -s http://localhost:8010/health | jq
 curl -s http://localhost:8010/api/sites | jq
 ```
 
-Install your first recipe from catalog:
+Install recipes via the CLI inside the container:
 
 ```bash
-web2api recipes catalog add hackernews --yes
+docker compose exec web2api web2api recipes catalog list
+docker compose exec web2api web2api recipes catalog add hackernews --yes
 ```
 
-## Local Setup (No Docker)
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-playwright install --with-deps chromium
-```
-
-Run service:
-
-```bash
-export RECIPES_DIR="$HOME/.web2api/recipes"
-export WEB2API_RECIPE_CATALOG_SOURCE="https://github.com/Endogen/web2api-recipes.git"
-uvicorn web2api.main:app --host 0.0.0.0 --port 8010
-```
-
-Install recipes:
-
-```bash
-web2api recipes catalog list
-web2api recipes catalog add hackernews --yes
-```
+> **Note:** When using Docker, all `web2api` CLI commands must be prefixed with
+> `docker compose exec web2api` since the CLI is installed inside the container.
 
 ## Server Setup (Recommended Pattern)
 
