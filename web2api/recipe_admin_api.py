@@ -87,9 +87,12 @@ def register_recipe_admin_routes(app: FastAPI, *, app_version: str) -> None:
                     "source": spec.source,
                     "source_ref": spec.source_ref,
                     "source_subdir": spec.source_subdir,
+                    "docs_url": spec.docs_url,
+                    "requires_env": spec.requires_env,
                     "installed": installed is not None and bool(installed.get("has_recipe")),
                     "enabled": installed.get("enabled") if installed is not None else None,
                     "managed": installed.get("managed") if installed is not None else False,
+                    "plugin": installed.get("plugin") if installed is not None else None,
                     "origin": (
                         str(installed.get("origin", "unmanaged"))
                         if installed is not None and bool(installed.get("has_recipe"))

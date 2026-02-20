@@ -186,6 +186,8 @@ def test_load_catalog_reads_recipe_entries(tmp_path: Path) -> None:
                         "source": "./demo",
                         "trusted": True,
                         "description": "demo plugin",
+                        "docs_url": "https://example.com/demo/readme",
+                        "requires_env": ["DEMO_TOKEN"],
                     }
                 }
             }
@@ -197,6 +199,8 @@ def test_load_catalog_reads_recipe_entries(tmp_path: Path) -> None:
     assert "demo" in catalog
     assert catalog["demo"]["source"] == "./demo"
     assert catalog["demo"]["trusted"] is True
+    assert catalog["demo"]["docs_url"] == "https://example.com/demo/readme"
+    assert catalog["demo"]["requires_env"] == ["DEMO_TOKEN"]
 
 
 def test_default_paths_exist(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -219,6 +223,8 @@ def test_resolve_catalog_recipes_from_local_file(tmp_path: Path) -> None:
                     "demo": {
                         "source": "./demo-recipe",
                         "trusted": True,
+                        "docs_url": "https://example.com/demo/setup",
+                        "requires_env": ["DEMO_TOKEN"],
                     }
                 }
             }
@@ -231,6 +237,30 @@ def test_resolve_catalog_recipes_from_local_file(tmp_path: Path) -> None:
     assert specs["demo"].slug == "demo"
     assert specs["demo"].source == str(source_recipe.resolve())
     assert specs["demo"].trusted is True
+    assert specs["demo"].docs_url == "https://example.com/demo/setup"
+    assert specs["demo"].requires_env == ["DEMO_TOKEN"]
+
+
+def test_resolve_catalog_recipes_derives_github_readme_url(tmp_path: Path) -> None:
+    catalog_file = tmp_path / "catalog.yaml"
+    catalog_file.write_text(
+        yaml.safe_dump(
+            {
+                "recipes": {
+                    "x": {
+                        "source": "https://github.com/acme/web2api-recipes.git",
+                        "ref": "main",
+                        "subdir": "recipes/x",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    specs = resolve_catalog_recipes(catalog_source=str(catalog_file))
+    assert specs["x"].docs_url == "https://github.com/acme/web2api-recipes/blob/main/recipes/x/README.md"
+    assert specs["x"].requires_env == []
 
 
 def test_resolve_catalog_recipes_sparse_checkout_for_remote_catalog(
@@ -271,6 +301,8 @@ def test_resolve_catalog_recipes_sparse_checkout_for_remote_catalog(
     assert "demo" in specs
     assert specs["demo"].source == "https://example.com/catalog.git"
     assert specs["demo"].source_subdir == "recipes/demo"
+    assert specs["demo"].docs_url is None
+    assert specs["demo"].requires_env == []
 
     assert any(
         command[:9]

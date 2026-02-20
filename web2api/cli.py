@@ -694,6 +694,8 @@ def recipes_catalog_list(
                 "subdir": spec.source_subdir,
                 "description": spec.description,
                 "trusted": spec.trusted,
+                "docs_url": spec.docs_url,
+                "requires_env": spec.requires_env,
             }
             for name, spec in sorted(catalog.items())
         }
@@ -717,6 +719,10 @@ def recipes_catalog_list(
         )
         if spec.description:
             typer.echo(f"  {spec.description}")
+        if spec.requires_env:
+            typer.echo(f"  requires env: {', '.join(spec.requires_env)}")
+        if spec.docs_url:
+            typer.echo(f"  docs: {spec.docs_url}")
 
 
 @catalog_app.command("add")

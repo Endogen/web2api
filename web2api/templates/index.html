@@ -437,10 +437,29 @@
         background: rgba(240, 170, 45, 0.2);
       }
 
+      .manager-badge.warning {
+        border-color: rgba(179, 77, 0, 0.45);
+        color: #7d3700;
+        background: rgba(240, 170, 45, 0.22);
+      }
+
       .manager-desc {
         margin: 0;
         color: #5a6b74;
         font-size: 0.82rem;
+      }
+
+      .manager-note {
+        color: #6a4600;
+      }
+
+      .manager-link {
+        color: var(--teal-900);
+        text-decoration: underline;
+      }
+
+      .manager-link:hover {
+        color: #0f3f44;
       }
 
       .manager-actions {
@@ -839,6 +858,60 @@
           return button;
         };
 
+        const toStringArray = (value) => {
+          if (!Array.isArray(value)) {
+            return [];
+          }
+          return value
+            .filter((item) => typeof item === "string")
+            .map((item) => item.trim())
+            .filter((item) => item !== "");
+        };
+
+        const getPluginBlock = (entry) => {
+          if (!entry || typeof entry !== "object") {
+            return null;
+          }
+          const plugin = entry.plugin;
+          if (!plugin || typeof plugin !== "object") {
+            return null;
+          }
+          return plugin;
+        };
+
+        const getMissingEnv = (entry) => {
+          const plugin = getPluginBlock(entry);
+          if (!plugin) {
+            return [];
+          }
+          const status = plugin.status;
+          if (!status || typeof status !== "object") {
+            return [];
+          }
+          const checks = status.checks;
+          if (!checks || typeof checks !== "object") {
+            return [];
+          }
+          const env = checks.env;
+          if (!env || typeof env !== "object") {
+            return [];
+          }
+          return toStringArray(env.missing);
+        };
+
+        const getDeclaredRequiredEnv = (entry) => {
+          const plugin = getPluginBlock(entry);
+          if (plugin) {
+            const fromPlugin = toStringArray(plugin.requires_env);
+            if (fromPlugin.length > 0) {
+              return fromPlugin;
+            }
+          }
+          return toStringArray(entry.requires_env);
+        };
+
+        const isHttpUrl = (value) => typeof value === "string" && /^https?:\/\//i.test(value);
+
         const runAction = async ({ url, label }) => {
           if (busy) {
             return;
@@ -893,6 +966,9 @@
             const managedValue = Boolean(entry.managed);
             const enabledValue = Boolean(entry.enabled);
             const originValue = String(entry.origin || (installedValue ? "unmanaged" : "catalog"));
+            const missingEnv = getMissingEnv(entry);
+            const requiredEnv = getDeclaredRequiredEnv(entry);
+            const docsUrlValue = typeof entry.docs_url === "string" ? entry.docs_url.trim() : "";
 
             const row = document.createElement("article");
             row.className = "manager-row";
@@ -927,12 +1003,44 @@
               title.append(stateBadge);
             }
 
+            if (missingEnv.length > 0 || (!installedValue && requiredEnv.length > 0)) {
+              const setupBadge = document.createElement("span");
+              setupBadge.className = "manager-badge warning";
+              setupBadge.textContent = "setup required";
+              title.append(setupBadge);
+            }
+
             row.append(title);
 
             const desc = document.createElement("p");
             desc.className = "manager-desc";
             desc.textContent = String(entry.description || "No description.");
             row.append(desc);
+
+            if (missingEnv.length > 0) {
+              const missing = document.createElement("p");
+              missing.className = "manager-desc manager-note";
+              missing.textContent = `Missing environment variables: ${missingEnv.join(", ")}`;
+              row.append(missing);
+            } else if (!installedValue && requiredEnv.length > 0) {
+              const requires = document.createElement("p");
+              requires.className = "manager-desc manager-note";
+              requires.textContent = `Requires environment variables: ${requiredEnv.join(", ")}`;
+              row.append(requires);
+            }
+
+            if (isHttpUrl(docsUrlValue)) {
+              const docs = document.createElement("p");
+              docs.className = "manager-desc";
+              const link = document.createElement("a");
+              link.className = "manager-link";
+              link.href = docsUrlValue;
+              link.target = "_blank";
+              link.rel = "noopener noreferrer";
+              link.textContent = "Recipe setup docs";
+              docs.append(link);
+              row.append(docs);
+            }
 
             const actions = document.createElement("div");
             actions.className = "manager-actions";
@@ -1023,6 +1131,9 @@
                 enabled: entry.enabled,
                 managed: entry.managed,
                 origin: entry.origin,
+                plugin: entry.plugin,
+                requires_env:
+                  entry.plugin && typeof entry.plugin === "object" ? entry.plugin.requires_env : [],
               },
               { catalogName: null }
             );

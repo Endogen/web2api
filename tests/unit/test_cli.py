@@ -312,6 +312,8 @@ def test_recipes_catalog_add_installs_from_catalog(
                 source_subdir=None,
                 description=None,
                 trusted=True,
+                docs_url="https://example.com/demo/readme",
+                requires_env=["DEMO_TOKEN"],
             )
         },
     )
@@ -333,3 +335,38 @@ def test_recipes_catalog_add_installs_from_catalog(
 
     assert result.exit_code == 0
     assert called["record_source_type"] == "catalog"
+
+
+def test_recipes_catalog_list_prints_docs_and_requires_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "web2api.cli.resolve_catalog_recipes",
+        lambda **kwargs: {
+            "x": CatalogRecipeSpec(
+                name="x",
+                slug="x",
+                source="https://github.com/acme/web2api-recipes.git",
+                source_ref="main",
+                source_subdir="recipes/x",
+                description="X recipe",
+                trusted=True,
+                docs_url="https://github.com/acme/web2api-recipes/blob/main/recipes/x/README.md",
+                requires_env=["BIRD_AUTH_TOKEN", "BIRD_CT0"],
+            )
+        },
+    )
+
+    catalog_file = tmp_path / "catalog.yaml"
+    catalog_file.write_text("recipes: {}\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.app,
+        ["recipes", "catalog", "list", "--catalog-source", str(catalog_file)],
+    )
+
+    assert result.exit_code == 0
+    assert "requires env: BIRD_AUTH_TOKEN, BIRD_CT0" in result.output
+    assert "docs: https://github.com/acme/web2api-recipes/blob/main/recipes/x/README.md" in result.output

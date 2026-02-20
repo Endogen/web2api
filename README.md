@@ -159,6 +159,13 @@ If `WEB2API_RECIPE_CATALOG_SOURCE` is unset, Web2API uses the official remote re
 `https://github.com/Endogen/web2api-recipes.git`.
 `recipes update` works only for recipes tracked in the manifest.
 
+Catalog entries can include optional setup hints:
+- `requires_env`: list of required environment variable names (e.g. `["BIRD_AUTH_TOKEN", "BIRD_CT0"]`)
+- `docs_url` (or `readme_url`): URL shown in CLI/UI as setup documentation
+
+If `docs_url` is omitted and the recipe source resolves to GitHub, Web2API automatically
+links to `<repo>/blob/<ref-or-HEAD>/<subdir>/README.md`.
+
 Recipes installed from untrusted sources (for example git URLs) are blocked from executing
 install/healthcheck commands unless `--allow-untrusted` is passed.
 

@@ -371,7 +371,16 @@ async def test_recipe_management_api_lifecycle(
 ) -> None:
     recipes_dir = tmp_path / "active-recipes"
     catalog_root = tmp_path / "catalog-src"
-    _write_recipe(catalog_root / "recipes", "gamma")
+    missing_env = "WEB2API_TEST_GAMMA_TOKEN_UNLIKELY"
+    monkeypatch.delenv(missing_env, raising=False)
+    _write_recipe(
+        catalog_root / "recipes",
+        "gamma",
+        plugin={
+            "version": "1.0.0",
+            "requires_env": [missing_env],
+        },
+    )
 
     catalog_file = catalog_root / "catalog.yaml"
     catalog_file.parent.mkdir(parents=True, exist_ok=True)
@@ -383,6 +392,8 @@ async def test_recipe_management_api_lifecycle(
                         "source": "./recipes/gamma",
                         "trusted": True,
                         "description": "Gamma recipe",
+                        "docs_url": "https://example.com/gamma/readme",
+                        "requires_env": [missing_env],
                     }
                 }
             }
@@ -406,6 +417,9 @@ async def test_recipe_management_api_lifecycle(
             assert payload_before["catalog_error"] is None
             assert payload_before["catalog"][0]["name"] == "gamma"
             assert payload_before["catalog"][0]["installed"] is False
+            assert payload_before["catalog"][0]["docs_url"] == "https://example.com/gamma/readme"
+            assert payload_before["catalog"][0]["requires_env"] == [missing_env]
+            assert payload_before["catalog"][0]["plugin"] is None
 
             install_resp = await client.post("/api/recipes/manage/install/gamma")
             assert install_resp.status_code == 200
@@ -426,6 +440,10 @@ async def test_recipe_management_api_lifecycle(
             )
             assert gamma_catalog["installed"] is True
             assert gamma_catalog["enabled"] is False
+            assert gamma_catalog["docs_url"] == "https://example.com/gamma/readme"
+            assert gamma_catalog["requires_env"] == [missing_env]
+            assert gamma_catalog["plugin"] is not None
+            assert gamma_catalog["plugin"]["status"]["checks"]["env"]["missing"] == [missing_env]
 
             enable_resp = await client.post("/api/recipes/manage/enable/gamma")
             assert enable_resp.status_code == 200
