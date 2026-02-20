@@ -50,19 +50,6 @@
         animation: lift-in 420ms ease both;
       }
 
-      .hero-tag {
-        display: inline-block;
-        margin-bottom: 0.5rem;
-        padding: 0.18rem 0.5rem;
-        border-radius: 999px;
-        border: 1px solid rgba(17, 79, 85, 0.25);
-        color: var(--teal-900);
-        background: var(--teal-100);
-        text-transform: uppercase;
-        font-size: 0.72rem;
-        letter-spacing: 0.08em;
-      }
-
       h1 {
         margin: 0;
         font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
@@ -87,7 +74,7 @@
       .toolbar {
         margin-top: 0.95rem;
         display: grid;
-        grid-template-columns: minmax(240px, 1fr) auto;
+        grid-template-columns: minmax(240px, 1fr);
         gap: 0.6rem;
         align-items: center;
       }
@@ -106,22 +93,6 @@
         outline: 2px solid rgba(30, 108, 116, 0.35);
         outline-offset: 1px;
         border-color: rgba(30, 108, 116, 0.45);
-      }
-
-      .toggle {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.42rem;
-        border: 1px solid var(--line);
-        border-radius: 9px;
-        padding: 0.48rem 0.58rem;
-        font-size: 0.84rem;
-        color: #34444b;
-        background: rgba(255, 255, 255, 0.84);
-      }
-
-      .toggle input {
-        accent-color: var(--teal-700);
       }
 
       .summary {
@@ -561,7 +532,6 @@
   <body>
     <main class="page">
       <header class="hero">
-        <span class="hero-tag">Live Catalog</span>
         <h1>Web2API Recipes</h1>
         <p class="subtitle">
           Browse installed API recipes, filter quickly, then open or copy ready URLs. Switch tabs
@@ -578,10 +548,6 @@
               placeholder="Filter by site, slug, endpoint, or description"
               autocomplete="off"
             />
-          </label>
-          <label class="toggle">
-            <input id="qOnlyToggle" type="checkbox" />
-            Show only endpoints requiring q
           </label>
         </div>
 
@@ -720,16 +686,14 @@
       (() => {
         const rows = Array.from(document.querySelectorAll(".row"));
         const filterInput = document.getElementById("filterInput");
-        const qOnlyToggle = document.getElementById("qOnlyToggle");
         const visibleSites = document.getElementById("visibleSites");
         const visibleEndpoints = document.getElementById("visibleEndpoints");
         const noMatches = document.getElementById("noMatches");
-        if (rows.length > 0 && filterInput && qOnlyToggle && visibleSites && visibleEndpoints && noMatches) {
+        if (rows.length > 0 && filterInput && visibleSites && visibleEndpoints && noMatches) {
           const normalize = (value) => value.trim().toLowerCase();
 
           const applyFilters = () => {
             const term = normalize(filterInput.value || "");
-            const qOnly = qOnlyToggle.checked;
 
             let shownSites = 0;
             let shownEndpoints = 0;
@@ -745,11 +709,8 @@
 
               endpointItems.forEach((endpointItem, index) => {
                 const endpointText = endpointItem.dataset.endpointText || "";
-                const requiresQuery = endpointItem.dataset.requiresQuery === "true";
-
-                const matchesToggle = !qOnly || requiresQuery;
                 const matchesTerm = term === "" || siteMatches || endpointText.includes(term);
-                const isVisible = matchesToggle && matchesTerm;
+                const isVisible = matchesTerm;
 
                 endpointItem.classList.toggle("is-hidden", !isVisible);
                 if (urlItems[index]) {
@@ -776,7 +737,6 @@
           };
 
           filterInput.addEventListener("input", applyFilters);
-          qOnlyToggle.addEventListener("change", applyFilters);
 
           document.querySelectorAll(".copy-btn").forEach((button) => {
             button.addEventListener("click", async () => {
