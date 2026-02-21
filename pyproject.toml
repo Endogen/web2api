@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "web2api"
-version = "0.1.0"
+version = "0.2.0"
 description = "Turn websites into REST APIs via live Playwright scraping."
 requires-python = ">=3.12"
 dependencies = [
