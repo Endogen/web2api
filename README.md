@@ -8,6 +8,12 @@ defines endpoints with selectors, actions, fields, and pagination in YAML. Optio
 scrapers handle interactive or complex sites. Optional plugin metadata can declare external
 dependencies and required env vars.
 
+![Recipe Repository](docs/screenshots/repository.png)
+*Recipe Repository — browse and install available recipes from the catalog.*
+
+![Installed APIs](docs/screenshots/installed.png)
+*Installed APIs — active recipes with their API endpoints and copy-to-clipboard URLs.*
+
 ## Terminology
 
 - **Recipe**: a site integration folder (`recipe.yaml` + optional `scraper.py`) that exposes API
