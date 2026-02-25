@@ -1042,6 +1042,21 @@
               title.append(setupBadge);
             }
 
+            if (managedValue) {
+              const updateAvailable = updateStatus[slugRaw];
+              if (updateAvailable === true) {
+                const updateBadge = document.createElement("span");
+                updateBadge.className = "manager-badge warning";
+                updateBadge.textContent = "update available";
+                title.append(updateBadge);
+              } else if (updateAvailable === false) {
+                const uptodateBadge = document.createElement("span");
+                uptodateBadge.className = "manager-badge active";
+                uptodateBadge.textContent = "up to date";
+                title.append(uptodateBadge);
+              }
+            }
+
             row.append(title);
 
             const desc = document.createElement("p");
@@ -1103,25 +1118,17 @@
                     }),
                 })
               );
-              if (managedValue) {
-                const updateAvailable = updateStatus[slugRaw];
-                if (updateAvailable === true) {
-                  actions.append(
-                    actionButton({
-                      label: "Update",
-                      onClick: () =>
-                        runAction({
-                          url: `/api/recipes/manage/update/${slugValue}`,
-                          label: `Updating ${slugRaw}`,
-                        }),
-                    })
-                  );
-                } else if (updateAvailable === false) {
-                  const badge = document.createElement("span");
-                  badge.className = "manager-badge active";
-                  badge.textContent = "Up to date";
-                  actions.append(badge);
-                }
+              if (managedValue && updateStatus[slugRaw] === true) {
+                actions.append(
+                  actionButton({
+                    label: "Update",
+                    onClick: () =>
+                      runAction({
+                        url: `/api/recipes/manage/update/${slugValue}`,
+                        label: `Updating ${slugRaw}`,
+                      }),
+                  })
+                );
               }
               actions.append(
                 actionButton({
