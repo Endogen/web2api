@@ -13,6 +13,8 @@ from web2api.plugin import parse_plugin_config
 from web2api.recipe_manager import (
     OFFICIAL_RECIPES_REPO_URL,
     build_install_commands,
+    check_recipe_updates,
+    compute_tree_hash,
     copy_recipe_into_recipes_dir,
     default_catalog_source,
     default_recipes_dir,
@@ -26,6 +28,7 @@ from web2api.recipe_manager import (
     record_recipe_install,
     remove_manifest_record,
     resolve_catalog_recipes,
+    save_manifest,
 )
 
 
@@ -382,3 +385,206 @@ def test_install_recipe_from_source_sparse_checkout_for_subdir(
         for command in commands
         if repo_path is not None
     )
+
+
+def test_compute_tree_hash_in_git_repo(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@test.com"],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "Test"],
+        check=True, capture_output=True,
+    )
+    subdir = repo / "recipes" / "demo"
+    subdir.mkdir(parents=True)
+    (subdir / "recipe.yaml").write_text("name: demo\n")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", "init"],
+        check=True, capture_output=True,
+    )
+
+    # Root tree hash
+    root_hash = compute_tree_hash(repo)
+    assert root_hash is not None
+    assert len(root_hash) == 40
+
+    # Subdir tree hash
+    subdir_hash = compute_tree_hash(repo, "recipes/demo")
+    assert subdir_hash is not None
+    assert len(subdir_hash) == 40
+    assert subdir_hash != root_hash
+
+    # None subdir gives root
+    none_hash = compute_tree_hash(repo, None)
+    assert none_hash == root_hash
+
+    # "." subdir gives root
+    dot_hash = compute_tree_hash(repo, ".")
+    assert dot_hash == root_hash
+
+
+def test_compute_tree_hash_non_git_dir(tmp_path: Path) -> None:
+    assert compute_tree_hash(tmp_path) is None
+
+
+def test_record_recipe_install_stores_tree_hash(tmp_path: Path) -> None:
+    recipes_dir = tmp_path / "recipes"
+    recipes_dir.mkdir(parents=True)
+
+    record = record_recipe_install(
+        recipes_dir,
+        slug="alpha",
+        folder="alpha",
+        source_type="git",
+        source="https://example.com/repo.git",
+        source_ref=None,
+        trusted=True,
+        installed_tree_hash="abc123def456",
+    )
+
+    assert record["installed_tree_hash"] == "abc123def456"
+    manifest = load_manifest(recipes_dir)
+    assert manifest["recipes"]["alpha"]["installed_tree_hash"] == "abc123def456"
+
+
+def test_record_recipe_install_no_tree_hash_by_default(tmp_path: Path) -> None:
+    recipes_dir = tmp_path / "recipes"
+    recipes_dir.mkdir(parents=True)
+
+    record = record_recipe_install(
+        recipes_dir,
+        slug="beta",
+        folder="beta",
+        source_type="local",
+        source="/tmp/source",
+        source_ref=None,
+        trusted=True,
+    )
+
+    assert "installed_tree_hash" not in record
+    manifest = load_manifest(recipes_dir)
+    assert "installed_tree_hash" not in manifest["recipes"]["beta"]
+
+
+def test_check_recipe_updates_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    recipes_dir = tmp_path / "recipes"
+    recipes_dir.mkdir(parents=True)
+
+    manifest = {
+        "version": 1,
+        "recipes": {
+            "alpha": {
+                "folder": "alpha",
+                "source_type": "git",
+                "source": "https://example.com/repo.git",
+                "source_ref": None,
+                "source_subdir": "recipes/alpha",
+                "trusted": True,
+                "installed_tree_hash": "aaa111",
+            },
+        },
+    }
+    save_manifest(recipes_dir, manifest)
+
+    repo_path_holder: list[Path] = []
+
+    def _fake_run(command, check: bool, text: bool, **kwargs):  # noqa: ANN001
+        del check, text
+        command_list = [str(part) for part in command]
+        if command_list[:3] == ["git", "init", "--quiet"]:
+            p = Path(command_list[3])
+            p.mkdir(parents=True, exist_ok=True)
+            repo_path_holder.append(p)
+        elif "rev-parse" in command_list:
+            return subprocess.CompletedProcess(command_list, 0, stdout="aaa111\n", stderr="")
+        return subprocess.CompletedProcess(command_list, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("web2api.recipe_manager.subprocess.run", _fake_run)
+
+    result = check_recipe_updates(recipes_dir)
+    assert result["alpha"] is False
+
+
+def test_check_recipe_updates_differ(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    recipes_dir = tmp_path / "recipes"
+    recipes_dir.mkdir(parents=True)
+
+    manifest = {
+        "version": 1,
+        "recipes": {
+            "alpha": {
+                "folder": "alpha",
+                "source_type": "catalog",
+                "source": "https://example.com/repo.git",
+                "source_ref": "main",
+                "source_subdir": "recipes/alpha",
+                "trusted": True,
+                "installed_tree_hash": "aaa111",
+            },
+        },
+    }
+    save_manifest(recipes_dir, manifest)
+
+    def _fake_run(command, check: bool, text: bool, **kwargs):  # noqa: ANN001
+        del check, text
+        command_list = [str(part) for part in command]
+        if command_list[:3] == ["git", "init", "--quiet"]:
+            Path(command_list[3]).mkdir(parents=True, exist_ok=True)
+        elif "rev-parse" in command_list:
+            return subprocess.CompletedProcess(command_list, 0, stdout="bbb222\n", stderr="")
+        return subprocess.CompletedProcess(command_list, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("web2api.recipe_manager.subprocess.run", _fake_run)
+
+    result = check_recipe_updates(recipes_dir)
+    assert result["alpha"] is True
+
+
+def test_check_recipe_updates_no_hash_returns_none(tmp_path: Path) -> None:
+    recipes_dir = tmp_path / "recipes"
+    recipes_dir.mkdir(parents=True)
+
+    manifest = {
+        "version": 1,
+        "recipes": {
+            "alpha": {
+                "folder": "alpha",
+                "source_type": "git",
+                "source": "https://example.com/repo.git",
+                "source_ref": None,
+                "trusted": True,
+            },
+        },
+    }
+    save_manifest(recipes_dir, manifest)
+
+    result = check_recipe_updates(recipes_dir)
+    assert result["alpha"] is None
+
+
+def test_check_recipe_updates_local_source_returns_none(tmp_path: Path) -> None:
+    recipes_dir = tmp_path / "recipes"
+    recipes_dir.mkdir(parents=True)
+
+    manifest = {
+        "version": 1,
+        "recipes": {
+            "local-recipe": {
+                "folder": "local-recipe",
+                "source_type": "local",
+                "source": "/tmp/local",
+                "source_ref": None,
+                "trusted": True,
+                "installed_tree_hash": "abc123",
+            },
+        },
+    }
+    save_manifest(recipes_dir, manifest)
+
+    result = check_recipe_updates(recipes_dir)
+    assert result["local-recipe"] is None

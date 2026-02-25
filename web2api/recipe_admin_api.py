@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from web2api.recipe_manager import (
     build_entry_payload,
+    check_recipe_updates,
     disable_recipe,
     discover_recipe_entries,
     enable_recipe,
@@ -113,6 +114,13 @@ def register_recipe_admin_routes(app: FastAPI, *, app_version: str) -> None:
                 "installed": installed_payload,
             }
         )
+
+    @app.post("/api/recipes/manage/check-updates")
+    async def recipes_check_updates(request: Request) -> JSONResponse:
+        """Check managed recipes for available updates."""
+        recipes_dir: Path = request.app.state.recipes_dir
+        updates = await asyncio.to_thread(check_recipe_updates, recipes_dir)
+        return JSONResponse(content={"updates": updates})
 
     @app.post("/api/recipes/manage/install/{name}")
     async def recipes_manage_install(name: str, request: Request) -> JSONResponse:

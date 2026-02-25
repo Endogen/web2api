@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Literal
 
@@ -11,6 +12,8 @@ ActionType = Literal["wait", "click", "scroll", "type", "sleep", "evaluate"]
 PaginationType = Literal["page_param", "next_link", "offset_param"]
 FieldContext = Literal["self", "next_sibling", "parent"]
 RESERVED_RECIPE_SLUGS = {"api", "health", "docs", "openapi", "redoc"}
+_PARAM_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+_RESERVED_PARAM_NAMES = {"q", "page"}
 FieldTransform = Literal[
     "regex_int",
     "regex_float",
@@ -102,6 +105,16 @@ class PaginationConfig(BaseModel):
         return self
 
 
+class ParamConfig(BaseModel):
+    """Declaration of an optional extra query parameter for an endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str | None = None
+    required: bool = False
+    example: str | None = None
+
+
 class EndpointConfig(BaseModel):
     """Recipe endpoint configuration."""
 
@@ -113,6 +126,22 @@ class EndpointConfig(BaseModel):
     actions: list[ActionConfig] = Field(default_factory=list)
     items: ItemsConfig
     pagination: PaginationConfig
+    params: dict[str, ParamConfig] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_params(self) -> EndpointConfig:
+        """Validate that param names are valid and don't conflict with reserved names."""
+        for name in self.params:
+            if name in _RESERVED_PARAM_NAMES:
+                raise ValueError(
+                    f"param name '{name}' conflicts with reserved query parameter"
+                )
+            if not _PARAM_NAME_PATTERN.match(name):
+                raise ValueError(
+                    f"param name '{name}' must match pattern "
+                    "[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}"
+                )
+        return self
 
 
 class RecipeConfig(BaseModel):
@@ -134,8 +163,6 @@ class RecipeConfig(BaseModel):
         if self.slug in RESERVED_RECIPE_SLUGS:
             reserved = ", ".join(sorted(RESERVED_RECIPE_SLUGS))
             raise ValueError(f"recipe slug '{self.slug}' is reserved ({reserved})")
-        import re
-
         name_pattern = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
         for name in self.endpoints:
             if not name_pattern.match(name):

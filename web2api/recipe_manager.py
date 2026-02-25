@@ -286,13 +286,14 @@ def record_recipe_install(
     source_ref: str | None,
     source_subdir: str | None = None,
     trusted: bool,
+    installed_tree_hash: str | None = None,
 ) -> dict[str, Any]:
     """Upsert an installed recipe record in manifest."""
     manifest = load_manifest(recipes_dir)
     recipes = manifest["recipes"]
     assert isinstance(recipes, dict)
 
-    record = {
+    record: dict[str, Any] = {
         "folder": folder,
         "source_type": source_type,
         "source": source,
@@ -301,6 +302,8 @@ def record_recipe_install(
         "trusted": trusted,
         "installed_at": datetime.now(UTC).isoformat(),
     }
+    if installed_tree_hash is not None:
+        record["installed_tree_hash"] = installed_tree_hash
     recipes[slug] = record
     save_manifest(recipes_dir, manifest)
     return record
@@ -785,6 +788,176 @@ def run_healthcheck(
     return result_payload
 
 
+def compute_tree_hash(repo_dir: Path, subdir: str | None = None) -> str | None:
+    """Compute git tree hash for a directory within a repo.
+
+    Uses ``git rev-parse HEAD:<subdir>`` (or ``HEAD^{tree}`` for root).
+    Returns ``None`` if *repo_dir* is not a git repo or the command fails.
+    """
+    try:
+        ref = "HEAD^{tree}"
+        if subdir and subdir not in (".", ""):
+            cleaned = subdir.strip("/")
+            if cleaned and cleaned != ".":
+                ref = f"HEAD:{cleaned}"
+        result = subprocess.run(
+            ["git", "-C", str(repo_dir), "rev-parse", ref],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        stdout = result.stdout
+        if not isinstance(stdout, str):
+            return None
+        return stdout.strip() or None
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def fetch_remote_tree_hash(
+    source: str,
+    source_ref: str | None = None,
+    source_subdir: str | None = None,
+) -> str | None:
+    """Fetch tree hash for a recipe directory from a remote git source.
+
+    Does a lightweight fetch (``--depth 1``, ``--filter=blob:none``) to a temp
+    dir, then resolves the tree hash.  Returns ``None`` on failure.
+    """
+    with tempfile.TemporaryDirectory(prefix="web2api-hash-check-") as tmp_dir:
+        target = Path(tmp_dir) / "repo"
+        try:
+            subprocess.run(
+                ["git", "init", "--quiet", str(target)],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(target), "remote", "add", "origin", source],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            fetch_ref = source_ref or "HEAD"
+            subprocess.run(
+                [
+                    "git", "-C", str(target),
+                    "fetch", "--quiet", "--depth", "1", "--filter=blob:none",
+                    "origin", fetch_ref,
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            ref = "FETCH_HEAD^{tree}"
+            if source_subdir and source_subdir not in (".", ""):
+                cleaned = source_subdir.strip("/")
+                if cleaned and cleaned != ".":
+                    ref = f"FETCH_HEAD:{cleaned}"
+            result = subprocess.run(
+                ["git", "-C", str(target), "rev-parse", ref],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            return result.stdout.strip() or None
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return None
+
+
+def check_recipe_updates(recipes_dir: Path) -> dict[str, bool | None]:
+    """Check all managed git-sourced recipes for updates.
+
+    Returns ``{slug: update_available}`` where:
+
+    * ``True`` – remote tree hash differs from installed
+    * ``False`` – hashes match, no update
+    * ``None`` – could not determine (non-git source, fetch failed, no stored hash)
+
+    Recipes are grouped by ``(source_url, source_ref)`` so we only fetch each
+    remote once, then resolve multiple subdirs from the same fetch.
+    """
+    manifest = load_manifest(recipes_dir)
+    recipes = manifest.get("recipes", {})
+    if not isinstance(recipes, dict):
+        return {}
+
+    results: dict[str, bool | None] = {}
+
+    # Group by (source, source_ref) for efficient fetching.
+    groups: dict[tuple[str, str | None], list[tuple[str, str | None, str | None]]] = {}
+    for slug, record in recipes.items():
+        if not isinstance(record, dict):
+            results[slug] = None
+            continue
+        source_type = record.get("source_type")
+        if source_type not in ("git", "catalog"):
+            results[slug] = None
+            continue
+        installed_hash = record.get("installed_tree_hash")
+        if not isinstance(installed_hash, str) or not installed_hash:
+            results[slug] = None
+            continue
+        source = record.get("source")
+        if not isinstance(source, str) or not source.strip():
+            results[slug] = None
+            continue
+        source_ref = record.get("source_ref")
+        if not isinstance(source_ref, str):
+            source_ref = None
+        source_subdir = record.get("source_subdir")
+        if not isinstance(source_subdir, str):
+            source_subdir = None
+
+        key = (source.strip(), source_ref)
+        groups.setdefault(key, []).append((slug, source_subdir, installed_hash))
+
+    for (source, source_ref), entries in groups.items():
+        with tempfile.TemporaryDirectory(prefix="web2api-hash-check-") as tmp_dir:
+            target = Path(tmp_dir) / "repo"
+            try:
+                subprocess.run(
+                    ["git", "init", "--quiet", str(target)],
+                    check=True, text=True, capture_output=True,
+                )
+                subprocess.run(
+                    ["git", "-C", str(target), "remote", "add", "origin", source],
+                    check=True, text=True, capture_output=True,
+                )
+                fetch_ref = source_ref or "HEAD"
+                subprocess.run(
+                    [
+                        "git", "-C", str(target),
+                        "fetch", "--quiet", "--depth", "1", "--filter=blob:none",
+                        "origin", fetch_ref,
+                    ],
+                    check=True, text=True, capture_output=True,
+                )
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                for slug, _, _ in entries:
+                    results[slug] = None
+                continue
+
+            for slug, subdir, installed_hash in entries:
+                try:
+                    ref = "FETCH_HEAD^{tree}"
+                    if subdir and subdir not in (".", ""):
+                        cleaned = subdir.strip("/")
+                        if cleaned and cleaned != ".":
+                            ref = f"FETCH_HEAD:{cleaned}"
+                    result = subprocess.run(
+                        ["git", "-C", str(target), "rev-parse", ref],
+                        check=True, text=True, capture_output=True,
+                    )
+                    remote_hash = result.stdout.strip()
+                    results[slug] = remote_hash != installed_hash
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    results[slug] = None
+
+    return results
+
+
 def resolve_source_type(source: str) -> SourceType:
     """Resolve recipe source type from source value."""
     if Path(source).expanduser().exists():
@@ -974,6 +1147,7 @@ def install_recipe_from_source(
         else None
     )
 
+    installed_tree_hash: str | None = None
     with checkout_source(
         source,
         source_ref=source_ref,
@@ -986,6 +1160,14 @@ def install_recipe_from_source(
             raise ValueError(
                 f"source recipe slug '{source_slug}' does not match expected slug '{expected_slug}'"
             )
+        # Compute tree hash for the recipe subdirectory within the checkout.
+        try:
+            rel = source_recipe_dir.relative_to(source_root)
+            tree_subdir = str(rel) if str(rel) != "." else None
+        except ValueError:
+            tree_subdir = None
+        installed_tree_hash = compute_tree_hash(source_root, tree_subdir)
+
         slug, destination = copy_recipe_into_recipes_dir(
             source_recipe_dir,
             recipes_dir,
@@ -1001,5 +1183,6 @@ def install_recipe_from_source(
         source_ref=source_ref,
         source_subdir=source_subdir,
         trusted=trusted,
+        installed_tree_hash=installed_tree_hash,
     )
     return slug, manifest_source_type

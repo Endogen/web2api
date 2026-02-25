@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from httpx import ASGITransport, AsyncClient
 
 from web2api.cache import ResponseCache
 from web2api.main import create_app
+from web2api.recipe_manager import save_manifest
 from web2api.schemas import (
     ApiResponse,
     ErrorCode,
@@ -168,6 +170,13 @@ async def test_api_routes_and_index(
             "search": {
                 "url": "https://example.com/search?q={query}&page={page}",
                 "requires_query": True,
+                "params": {
+                    "tools_url": {
+                        "description": "MCP bridge URL",
+                        "required": False,
+                        "example": "http://localhost:8100",
+                    },
+                },
                 "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
                 "pagination": {"type": "page_param", "param": "page"},
             },
@@ -268,6 +277,20 @@ async def test_api_routes_and_index(
                 alpha_site = next(s for s in sites_resp.json() if s["slug"] == "alpha")
                 ep_names = {ep["name"] for ep in alpha_site["endpoints"]}
                 assert ep_names == {"read", "search"}
+                # Verify params are exposed in endpoint payload
+                search_ep = next(
+                    ep for ep in alpha_site["endpoints"] if ep["name"] == "search"
+                )
+                assert "params" in search_ep
+                assert "tools_url" in search_ep["params"]
+                assert search_ep["params"]["tools_url"]["description"] == "MCP bridge URL"
+                assert search_ep["params"]["tools_url"]["required"] is False
+                assert search_ep["params"]["tools_url"]["example"] == "http://localhost:8100"
+                # Endpoint without params should have empty dict
+                read_ep = next(
+                    ep for ep in alpha_site["endpoints"] if ep["name"] == "read"
+                )
+                assert read_ep["params"] == {}
                 assert alpha_site["plugin"]["version"] == "1.0.0"
                 assert alpha_site["plugin"]["status"]["ready"] is False
                 assert missing_env in alpha_site["plugin"]["status"]["checks"]["env"]["missing"]
@@ -502,3 +525,60 @@ async def test_recipe_management_uninstall_force_for_unmanaged_local(
             assert sites_after_uninstall.status_code == 200
             slugs = {site["slug"] for site in sites_after_uninstall.json()}
             assert "local-only" not in slugs
+
+
+@pytest.mark.asyncio
+async def test_check_updates_endpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recipes_dir = tmp_path / "active-recipes"
+    _write_recipe(recipes_dir, "alpha")
+
+    # Pre-populate manifest with a known tree hash.
+    save_manifest(
+        recipes_dir,
+        {
+            "version": 1,
+            "recipes": {
+                "alpha": {
+                    "folder": "alpha",
+                    "source_type": "git",
+                    "source": "https://example.com/repo.git",
+                    "source_ref": None,
+                    "source_subdir": None,
+                    "trusted": True,
+                    "installed_tree_hash": "aaa111",
+                },
+            },
+        },
+    )
+
+    def _fake_run(command, check: bool, text: bool, **kwargs):  # noqa: ANN001
+        del check, text
+        command_list = [str(part) for part in command]
+        if command_list[:3] == ["git", "init", "--quiet"]:
+            Path(command_list[3]).mkdir(parents=True, exist_ok=True)
+        elif "rev-parse" in command_list:
+            return subprocess.CompletedProcess(command_list, 0, stdout="bbb222\n", stderr="")
+        return subprocess.CompletedProcess(command_list, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("web2api.recipe_manager.subprocess.run", _fake_run)
+
+    catalog_file = tmp_path / "catalog.yaml"
+    catalog_file.write_text(yaml.safe_dump({"recipes": {}}), encoding="utf-8")
+    monkeypatch.setenv("WEB2API_RECIPE_CATALOG_SOURCE", str(catalog_file))
+    monkeypatch.delenv("WEB2API_RECIPE_CATALOG_REF", raising=False)
+    monkeypatch.delenv("WEB2API_RECIPE_CATALOG_PATH", raising=False)
+
+    fake_pool = FakePool()
+    app = create_app(recipes_dir=recipes_dir, pool=fake_pool)
+
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/recipes/manage/check-updates")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "updates" in data
+            assert data["updates"]["alpha"] is True

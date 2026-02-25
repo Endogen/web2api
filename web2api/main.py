@@ -95,6 +95,14 @@ def _site_payload(recipe: Recipe) -> dict[str, Any]:
             "description": ep_config.description,
             "requires_query": ep_config.requires_query,
             "link": f"/{config.slug}/{name}",
+            "params": {
+                param_name: {
+                    "description": param.description,
+                    "required": param.required,
+                    "example": param.example,
+                }
+                for param_name, param in ep_config.params.items()
+            },
         })
     return {
         "name": config.name,

@@ -7,7 +7,7 @@ from copy import deepcopy
 import pytest
 from pydantic import ValidationError
 
-from web2api.config import RecipeConfig, parse_recipe_config
+from web2api.config import ParamConfig, RecipeConfig, parse_recipe_config
 
 
 def _valid_recipe_data() -> dict[str, object]:
@@ -148,5 +148,92 @@ def test_reserved_slug_is_rejected() -> None:
     data = _valid_recipe_data()
     data["slug"] = "api"
 
+    with pytest.raises(ValidationError):
+        RecipeConfig.model_validate(data)
+
+
+def test_param_config_parses_correctly() -> None:
+    """ParamConfig should parse with all fields."""
+    param = ParamConfig.model_validate({
+        "description": "A test param",
+        "required": True,
+        "example": "http://localhost:8100",
+    })
+    assert param.description == "A test param"
+    assert param.required is True
+    assert param.example == "http://localhost:8100"
+
+
+def test_param_config_defaults() -> None:
+    """ParamConfig should use sensible defaults."""
+    param = ParamConfig.model_validate({})
+    assert param.description is None
+    assert param.required is False
+    assert param.example is None
+
+
+def test_endpoint_with_params_parses() -> None:
+    """Endpoint with declared params should parse correctly."""
+    data = _valid_recipe_data()
+    data["endpoints"]["read"]["params"] = {
+        "tools_url": {
+            "description": "MCP bridge URL",
+            "required": False,
+            "example": "http://localhost:8100",
+        }
+    }
+    config = RecipeConfig.model_validate(data)
+    params = config.endpoints["read"].params
+    assert "tools_url" in params
+    assert params["tools_url"].description == "MCP bridge URL"
+    assert params["tools_url"].required is False
+    assert params["tools_url"].example == "http://localhost:8100"
+
+
+def test_endpoint_params_default_to_empty() -> None:
+    """Endpoint without params field should default to empty dict."""
+    config = RecipeConfig.model_validate(_valid_recipe_data())
+    assert config.endpoints["read"].params == {}
+
+
+def test_reserved_param_name_q_is_rejected() -> None:
+    """Param name 'q' conflicts with reserved query parameter."""
+    data = _valid_recipe_data()
+    data["endpoints"]["read"]["params"] = {
+        "q": {"description": "should fail"},
+    }
+    with pytest.raises(ValidationError, match="reserved"):
+        RecipeConfig.model_validate(data)
+
+
+def test_reserved_param_name_page_is_rejected() -> None:
+    """Param name 'page' conflicts with reserved query parameter."""
+    data = _valid_recipe_data()
+    data["endpoints"]["read"]["params"] = {
+        "page": {"description": "should fail"},
+    }
+    with pytest.raises(ValidationError, match="reserved"):
+        RecipeConfig.model_validate(data)
+
+
+def test_invalid_param_name_is_rejected() -> None:
+    """Param names that don't match the pattern should fail."""
+    data = _valid_recipe_data()
+    data["endpoints"]["read"]["params"] = {
+        "bad!name": {"description": "invalid chars"},
+    }
+    with pytest.raises(ValidationError, match="must match pattern"):
+        RecipeConfig.model_validate(data)
+
+
+def test_param_config_rejects_extra_fields() -> None:
+    """ParamConfig should reject unknown fields."""
+    data = _valid_recipe_data()
+    data["endpoints"]["read"]["params"] = {
+        "tools_url": {
+            "description": "MCP bridge",
+            "unknown_field": "oops",
+        },
+    }
     with pytest.raises(ValidationError):
         RecipeConfig.model_validate(data)

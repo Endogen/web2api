@@ -275,6 +275,23 @@
         background: rgba(240, 170, 45, 0.22);
       }
 
+      .param-badge {
+        border: 1px solid rgba(17, 79, 85, 0.3);
+        border-radius: 999px;
+        padding: 0.08rem 0.34rem;
+        font-family: "Consolas", "SFMono-Regular", Menlo, monospace;
+        font-size: 0.66rem;
+        color: var(--teal-900);
+        background: rgba(17, 79, 85, 0.1);
+        cursor: default;
+      }
+
+      .param-badge.is-required {
+        border-color: rgba(240, 170, 45, 0.45);
+        color: #7b4a00;
+        background: rgba(240, 170, 45, 0.22);
+      }
+
       .ep-desc {
         margin: 0.24rem 0 0;
         color: #5f7078;
@@ -641,6 +658,9 @@
                   {% if ep.requires_query %}
                   <span class="q-badge">q</span>
                   {% endif %}
+                  {% for param_name, param in ep.params.items() %}
+                  <span class="param-badge{% if param.required %} is-required{% endif %}" title="{{ param.description|default('', true) }}">{{ param_name }}</span>
+                  {% endfor %}
                 </div>
                 {% if ep.description %}
                 <p class="ep-desc">{{ ep.description }}</p>
@@ -652,9 +672,19 @@
             <section class="urls">
               {% for ep in site.endpoints %}
               {% if ep.requires_query %}
-              {% set endpoint_url = ep.link ~ '?q=example&page=1' %}
+              {% set endpoint_url = ep.link ~ '?q=example' %}
               {% else %}
-              {% set endpoint_url = ep.link ~ '?page=1' %}
+              {% set endpoint_url = ep.link ~ '?' %}
+              {% endif %}
+              {% for param_name, param in ep.params.items() %}
+              {% if param.example %}
+              {% set endpoint_url = endpoint_url ~ '&' ~ param_name ~ '=' ~ param.example %}
+              {% endif %}
+              {% endfor %}
+              {% if endpoint_url.endswith('?') %}
+              {% set endpoint_url = endpoint_url ~ 'page=1' %}
+              {% else %}
+              {% set endpoint_url = endpoint_url ~ '&page=1' %}
               {% endif %}
               <div
                 class="url-item"
@@ -830,6 +860,7 @@
         }
 
         let busy = false;
+        let updateStatus = {};
 
         const setStatus = (message, { error = false } = {}) => {
           managerStatus.textContent = message;
@@ -1072,16 +1103,24 @@
                 })
               );
               if (managedValue) {
-                actions.append(
-                  actionButton({
-                    label: "Update",
-                    onClick: () =>
-                      runAction({
-                        url: `/api/recipes/manage/update/${slugValue}`,
-                        label: `Updating ${slugRaw}`,
-                      }),
-                  })
-                );
+                const updateAvailable = updateStatus[slugRaw];
+                if (updateAvailable === true) {
+                  actions.append(
+                    actionButton({
+                      label: "Update",
+                      onClick: () =>
+                        runAction({
+                          url: `/api/recipes/manage/update/${slugValue}`,
+                          label: `Updating ${slugRaw}`,
+                        }),
+                    })
+                  );
+                } else if (updateAvailable === false) {
+                  const badge = document.createElement("span");
+                  badge.className = "manager-badge active";
+                  badge.textContent = "Up to date";
+                  actions.append(badge);
+                }
               }
               actions.append(
                 actionButton({
@@ -1149,6 +1188,17 @@
             }
             const payload = await response.json();
             renderCatalog(payload);
+
+            // Check for updates in the background.
+            fetch("/api/recipes/manage/check-updates", { method: "POST" })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((data) => {
+                if (data && typeof data.updates === "object" && data.updates !== null) {
+                  updateStatus = data.updates;
+                  renderCatalog(payload);
+                }
+              })
+              .catch(() => {});
           } catch (error) {
             const message = error instanceof Error ? error.message : "catalog load failed";
             setStatus(message, { error: true });
