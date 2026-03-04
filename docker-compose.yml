@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "8010:8000"
+      - "127.0.0.1:8010:8000"
     volumes:
       - ./data/recipes:/data/recipes
     environment:
