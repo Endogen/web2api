@@ -618,6 +618,17 @@
         >
           Recipe Repository
         </button>
+        <button
+          type="button"
+          id="tabMcp"
+          class="view-tab"
+          data-view-target="mcp"
+          role="tab"
+          aria-selected="false"
+          aria-controls="mcpPanel"
+        >
+          MCP Tools
+        </button>
       </div>
 
       <section
@@ -729,6 +740,56 @@
         </div>
         <p class="manager-status" id="managerStatus"></p>
         <div class="manager-list" id="managerList"></div>
+      </section>
+      <section
+        class="manager view-panel"
+        id="mcpPanel"
+        data-view-panel="mcp"
+        role="tabpanel"
+        aria-labelledby="tabMcp"
+      >
+        <div class="manager-top">
+          <div>
+            <h2>MCP Tool Bridge</h2>
+            <p class="manager-meta">
+              Every recipe endpoint is automatically exposed as an
+              <a class="manager-link" href="https://modelcontextprotocol.io" target="_blank" rel="noopener">MCP</a>
+              tool. Any MCP-compatible client can discover and call them.
+            </p>
+          </div>
+          <button class="manager-btn" id="mcpReload" type="button">Refresh</button>
+        </div>
+
+        <div style="margin-top:0.7rem;display:grid;gap:0.5rem;">
+          <div class="endpoint-item" style="display:grid;gap:0.3rem;">
+            <div class="endpoint-top">
+              <p class="ep-name" style="font-size:0.82rem;">Tools Endpoint</p>
+            </div>
+            <div class="url-item">
+              <span class="url" id="mcpBaseUrl">/mcp/tools</span>
+              <button class="copy-btn" type="button" id="mcpCopyBase">copy</button>
+            </div>
+          </div>
+
+          <div class="endpoint-item" style="display:grid;gap:0.3rem;">
+            <div class="endpoint-top">
+              <p class="ep-name" style="font-size:0.82rem;">Filtered Endpoints</p>
+              <span class="q-badge">path-based</span>
+            </div>
+            <p class="ep-desc">Use path filters to include or exclude recipes by slug:</p>
+            <div class="url-item">
+              <span class="url">/mcp/only/brave-search,deepl/tools</span>
+              <button class="copy-btn mcp-copy-filter" type="button" data-path="/mcp/only/brave-search,deepl/tools">copy</button>
+            </div>
+            <div class="url-item">
+              <span class="url">/mcp/exclude/allenai/tools</span>
+              <button class="copy-btn mcp-copy-filter" type="button" data-path="/mcp/exclude/allenai/tools">copy</button>
+            </div>
+          </div>
+        </div>
+
+        <p class="manager-status" id="mcpStatus" style="margin-top:0.6rem;"></p>
+        <div class="manager-list" id="mcpList" style="margin-top:0.4rem;"></div>
       </section>
     </main>
 
@@ -1221,6 +1282,166 @@
         });
 
         void loadCatalog();
+
+        /* ── MCP Tools tab ──────────────────────────────────── */
+        const mcpStatus = document.getElementById("mcpStatus");
+        const mcpList = document.getElementById("mcpList");
+        const mcpReload = document.getElementById("mcpReload");
+        const mcpCopyBase = document.getElementById("mcpCopyBase");
+        const mcpBaseUrl = document.getElementById("mcpBaseUrl");
+
+        if (mcpCopyBase && mcpBaseUrl) {
+          mcpCopyBase.addEventListener("click", async () => {
+            const url = `${window.location.origin}/mcp/tools`;
+            try {
+              await navigator.clipboard.writeText(url);
+              mcpCopyBase.textContent = "copied";
+              setTimeout(() => { mcpCopyBase.textContent = "copy"; }, 1100);
+            } catch (_) {
+              mcpCopyBase.textContent = "failed";
+              setTimeout(() => { mcpCopyBase.textContent = "copy"; }, 1100);
+            }
+          });
+        }
+
+        document.querySelectorAll(".mcp-copy-filter").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const url = `${window.location.origin}${btn.dataset.path}`;
+            try {
+              await navigator.clipboard.writeText(url);
+              btn.textContent = "copied";
+              setTimeout(() => { btn.textContent = "copy"; }, 1100);
+            } catch (_) {
+              btn.textContent = "failed";
+              setTimeout(() => { btn.textContent = "copy"; }, 1100);
+            }
+          });
+        });
+
+        const renderMcpTools = (tools) => {
+          if (!mcpList) return;
+          mcpList.replaceChildren();
+
+          // Group by recipe slug
+          const grouped = {};
+          tools.forEach((tool) => {
+            const sep = tool.name.indexOf("__");
+            const slug = sep > -1 ? tool.name.substring(0, sep) : tool.name;
+            if (!grouped[slug]) grouped[slug] = [];
+            grouped[slug].push(tool);
+          });
+
+          Object.entries(grouped).forEach(([slug, slugTools]) => {
+            const row = document.createElement("article");
+            row.className = "manager-row";
+
+            const title = document.createElement("div");
+            title.className = "manager-title";
+            const nameEl = document.createElement("span");
+            nameEl.className = "manager-name";
+            nameEl.textContent = slug;
+            title.append(nameEl);
+            const countBadge = document.createElement("span");
+            countBadge.className = "manager-badge active";
+            countBadge.textContent = `${slugTools.length} tool${slugTools.length > 1 ? "s" : ""}`;
+            title.append(countBadge);
+            row.append(title);
+
+            slugTools.forEach((tool) => {
+              const item = document.createElement("div");
+              item.className = "endpoint-item";
+              item.style.marginTop = "0.3rem";
+
+              const top = document.createElement("div");
+              top.className = "endpoint-top";
+              const tn = document.createElement("p");
+              tn.className = "ep-name";
+              tn.textContent = tool.name;
+              top.append(tn);
+
+              const params = tool.parameters;
+              if (params && params.properties) {
+                Object.entries(params.properties).forEach(([pname, pdef]) => {
+                  const badge = document.createElement("span");
+                  const isReq = (params.required || []).includes(pname);
+                  badge.className = `param-badge${isReq ? " is-required" : ""}`;
+                  badge.textContent = pname;
+                  badge.title = pdef.description || "";
+                  top.append(badge);
+                });
+              }
+              item.append(top);
+
+              // Extract description without the [SiteName] prefix for cleaner display
+              const desc = document.createElement("p");
+              desc.className = "ep-desc";
+              desc.textContent = tool.description || "";
+              item.append(desc);
+
+              // Copy tool name button
+              const urlRow = document.createElement("div");
+              urlRow.className = "url-item";
+              urlRow.style.marginTop = "0.25rem";
+              const urlEl = document.createElement("span");
+              urlEl.className = "url";
+              urlEl.textContent = `/mcp/tools/${tool.name}`;
+              urlRow.append(urlEl);
+              const copyBtn = document.createElement("button");
+              copyBtn.className = "copy-btn";
+              copyBtn.type = "button";
+              copyBtn.textContent = "copy";
+              copyBtn.addEventListener("click", async () => {
+                const fullUrl = `${window.location.origin}/mcp/tools/${tool.name}`;
+                try {
+                  await navigator.clipboard.writeText(fullUrl);
+                  copyBtn.textContent = "copied";
+                  setTimeout(() => { copyBtn.textContent = "copy"; }, 1100);
+                } catch (_) {
+                  copyBtn.textContent = "failed";
+                  setTimeout(() => { copyBtn.textContent = "copy"; }, 1100);
+                }
+              });
+              urlRow.append(copyBtn);
+              item.append(urlRow);
+
+              row.append(item);
+            });
+
+            mcpList.append(row);
+          });
+        };
+
+        const loadMcpTools = async () => {
+          if (!mcpStatus || !mcpList) return;
+          mcpStatus.textContent = "Loading tools...";
+          mcpStatus.classList.remove("is-error");
+          try {
+            const resp = await fetch("/mcp/tools");
+            if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+            const tools = await resp.json();
+            mcpStatus.textContent = `${tools.length} tools available across all recipes.`;
+            renderMcpTools(tools);
+          } catch (err) {
+            mcpStatus.textContent = err.message || "Failed to load tools.";
+            mcpStatus.classList.add("is-error");
+          }
+        };
+
+        if (mcpReload) {
+          mcpReload.addEventListener("click", () => void loadMcpTools());
+        }
+
+        // Lazy-load MCP tools when tab is first activated
+        let mcpLoaded = false;
+        const mcpTab = document.getElementById("tabMcp");
+        if (mcpTab) {
+          mcpTab.addEventListener("click", () => {
+            if (!mcpLoaded) {
+              mcpLoaded = true;
+              void loadMcpTools();
+            }
+          });
+        }
       })();
     </script>
   </body>
