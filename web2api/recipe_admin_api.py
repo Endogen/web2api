@@ -29,7 +29,25 @@ from web2api.recipe_manager import (
 from web2api.registry import RecipeRegistry
 
 
+async def _reload_registry_and_tools(app: FastAPI, *, app_version: str) -> None:
+    """Reload the recipe registry and rebuild MCP tools."""
+    registry = RecipeRegistry(
+        app_version=app_version,
+        enforce_plugin_compatibility=app.state.enforce_plugin_compatibility,
+    )
+    registry.discover(app.state.recipes_dir)
+    app.state.registry = registry
+
+    # Rebuild MCP tools so connected clients see the change
+    try:
+        from web2api.mcp_server import rebuild_mcp_tools
+        await rebuild_mcp_tools()
+    except Exception:
+        pass  # MCP server may not be mounted
+
+
 def _reload_registry(app: FastAPI, *, app_version: str) -> None:
+    """Sync wrapper — use _reload_registry_and_tools when in async context."""
     registry = RecipeRegistry(
         app_version=app_version,
         enforce_plugin_compatibility=app.state.enforce_plugin_compatibility,
@@ -153,7 +171,7 @@ def register_recipe_admin_routes(app: FastAPI, *, app_version: str) -> None:
             except (ValueError, FileNotFoundError, subprocess.CalledProcessError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-            _reload_registry(request.app, app_version=app_version)
+            await _reload_registry_and_tools(request.app, app_version=app_version)
 
         return JSONResponse(
             content={
@@ -203,7 +221,7 @@ def register_recipe_admin_routes(app: FastAPI, *, app_version: str) -> None:
 
             if was_disabled:
                 disable_recipe(recipes_dir / updated_slug)
-            _reload_registry(request.app, app_version=app_version)
+            await _reload_registry_and_tools(request.app, app_version=app_version)
 
         return JSONResponse(
             content={
@@ -245,7 +263,7 @@ def register_recipe_admin_routes(app: FastAPI, *, app_version: str) -> None:
             if recipe_path.exists():
                 shutil.rmtree(recipe_path)
             removed = remove_manifest_record(recipes_dir, slug)
-            _reload_registry(request.app, app_version=app_version)
+            await _reload_registry_and_tools(request.app, app_version=app_version)
 
         return JSONResponse(
             content={
@@ -268,7 +286,7 @@ def register_recipe_admin_routes(app: FastAPI, *, app_version: str) -> None:
                 raise HTTPException(status_code=404, detail=f"recipe '{slug}' was not found")
             if not entry.enabled:
                 enable_recipe(entry.path)
-                _reload_registry(request.app, app_version=app_version)
+                await _reload_registry_and_tools(request.app, app_version=app_version)
         return JSONResponse(content={"ok": True, "action": "enable", "slug": slug})
 
     @app.post("/api/recipes/manage/disable/{slug}")
@@ -282,5 +300,5 @@ def register_recipe_admin_routes(app: FastAPI, *, app_version: str) -> None:
                 raise HTTPException(status_code=404, detail=f"recipe '{slug}' was not found")
             if entry.enabled:
                 disable_recipe(entry.path)
-                _reload_registry(request.app, app_version=app_version)
+                await _reload_registry_and_tools(request.app, app_version=app_version)
         return JSONResponse(content={"ok": True, "action": "disable", "slug": slug})

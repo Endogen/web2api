@@ -380,7 +380,7 @@ def create_app(
 
     register_recipe_admin_routes(app, app_version=APP_VERSION)
     register_mcp_routes(app)
-    mount_mcp_server(app)
+    mount_mcp_server(app, registry=recipe_registry)
 
     @app.get("/health")
     async def health(request: Request) -> JSONResponse:
