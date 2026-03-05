@@ -1,36 +1,26 @@
 """MCP HTTP bridge — auto-exposes all web2api recipes as MCP tools.
 
+This is the legacy HTTP bridge for non-MCP clients and the web UI.
+For MCP protocol clients, use the server at ``/mcp/`` instead.
+
 Endpoints:
     GET  /mcp/tools          → list all recipe endpoints as tool definitions
     POST /mcp/tools/{name}   → call a tool (routes to the matching recipe endpoint)
-
-Tool names use the pattern ``{slug}__{endpoint}`` (double-underscore separator).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from web2api.mcp_utils import build_tool_name, parse_tool_name
 from web2api.registry import RecipeRegistry
 
 logger = logging.getLogger(__name__)
-
-TOOL_NAME_SEP = "__"
-
-
-def _build_tool_name(slug: str, endpoint: str) -> str:
-    return f"{slug}{TOOL_NAME_SEP}{endpoint}"
-
-
-def _parse_tool_name(name: str) -> tuple[str, str] | None:
-    parts = name.split(TOOL_NAME_SEP, 1)
-    if len(parts) != 2:
-        return None
-    return parts[0], parts[1]
 
 
 def _build_tool_parameters(endpoint_cfg: Any) -> dict[str, Any]:
@@ -74,7 +64,7 @@ def _tools_from_registry(registry: RecipeRegistry) -> list[dict[str, Any]]:
         site_name = recipe.config.name
 
         for ep_name, ep_cfg in recipe.config.endpoints.items():
-            tool_name = _build_tool_name(slug, ep_name)
+            tool_name = build_tool_name(slug, ep_name)
             description = ep_cfg.description or f"{site_name} — {ep_name}"
             description = f"[{site_name}] {description}"
 
@@ -109,9 +99,9 @@ def register_mcp_routes(app: FastAPI) -> None:
         exclude_set = {s.strip() for s in exclude.split(",") if s.strip()} if exclude else None
 
         if only_set:
-            tools = [t for t in tools if _parse_tool_name(t["name"])[0] in only_set]
+            tools = [t for t in tools if parse_tool_name(t["name"])[0] in only_set]
         if exclude_set:
-            tools = [t for t in tools if _parse_tool_name(t["name"])[0] not in exclude_set]
+            tools = [t for t in tools if parse_tool_name(t["name"])[0] not in exclude_set]
 
         return tools
 
@@ -133,9 +123,9 @@ def register_mcp_routes(app: FastAPI) -> None:
         slugs = {s.strip() for s in filter_value.split(",") if s.strip()}
 
         if filter_type == "only":
-            tools = [t for t in tools if _parse_tool_name(t["name"])[0] in slugs]
+            tools = [t for t in tools if parse_tool_name(t["name"])[0] in slugs]
         elif filter_type == "exclude":
-            tools = [t for t in tools if _parse_tool_name(t["name"])[0] not in slugs]
+            tools = [t for t in tools if parse_tool_name(t["name"])[0] not in slugs]
 
         return tools
 
@@ -159,7 +149,7 @@ def register_mcp_routes(app: FastAPI) -> None:
         Accepts a JSON body with the tool parameters (e.g. ``{"q": "..."}``)
         and returns ``{"result": ...}`` with the scraped data.
         """
-        parsed = _parse_tool_name(tool_name)
+        parsed = parse_tool_name(tool_name)
         if parsed is None:
             raise HTTPException(status_code=404, detail=f"Invalid tool name: {tool_name}")
 
@@ -170,7 +160,6 @@ def register_mcp_routes(app: FastAPI) -> None:
         if recipe is None or endpoint_name not in recipe.config.endpoints:
             raise HTTPException(status_code=404, detail=f"Tool not found: {tool_name}")
 
-        # Parse arguments from request body
         try:
             body = await request.json()
         except Exception:
@@ -181,12 +170,7 @@ def register_mcp_routes(app: FastAPI) -> None:
 
         query = body.pop("q", None) or body.pop("query", None)
 
-        # Build the internal request URL and call the recipe endpoint
-        # We import here to avoid circular imports
         from web2api.main import _serve_recipe_endpoint
-
-        # Build a fake request with the extra params as query string
-        from starlette.datastructures import QueryParams
 
         params = {}
         if query:
@@ -195,10 +179,8 @@ def register_mcp_routes(app: FastAPI) -> None:
         for k, v in body.items():
             params[k] = str(v)
 
-        # Override request query params
         scope = dict(request.scope)
         scope["query_string"] = "&".join(f"{k}={v}" for k, v in params.items()).encode()
-
         inner_request = Request(scope, request.receive)
 
         try:
@@ -210,29 +192,20 @@ def register_mcp_routes(app: FastAPI) -> None:
                 q=query,
             )
 
-            # Parse the JSONResponse body
-            import json
-
             response_data = json.loads(response.body.decode())
-
-            # Return a simplified result for the MCP consumer
             items = response_data.get("items", [])
             error = response_data.get("error")
 
             if error:
                 return JSONResponse({"result": f"Error: {error.get('message', 'unknown error')}"})
 
-            # Flatten items into a readable result
             if len(items) == 1:
                 fields = items[0].get("fields", {})
-                # If there's a clear "response" or "answer" field, return just that
                 for key in ("response", "answer", "text", "content", "result"):
                     if key in fields:
                         return JSONResponse({"result": fields[key]})
-                # Otherwise return all fields
                 return JSONResponse({"result": fields or items[0]})
             elif items:
-                # Multiple items — return them as a list
                 simplified = []
                 for item in items:
                     entry: dict[str, Any] = {}

@@ -4,12 +4,12 @@ Each recipe endpoint becomes its own tool with proper name, description, and
 typed parameters. Tools are rebuilt automatically when recipes change.
 
 Clients connect via:
-    claude mcp add --transport http web2api https://web2api.endogen.dev/mcp/
+    claude mcp add --transport http web2api https://your-host/mcp/
 """
 
 from __future__ import annotations
 
-import json
+import inspect
 import logging
 from typing import Any
 
@@ -17,13 +17,18 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+from web2api.mcp_utils import (
+    TOOL_NAME_SEP,
+    build_tool_name,
+    format_tool_result,
+    sites_from_registry,
+)
+
 logger = logging.getLogger(__name__)
 
-TOOL_NAME_SEP = "__"
 WEB2API_INTERNAL_URL = "http://127.0.0.1:8000"
 
-# Global reference so we can trigger tool rebuild from admin routes
-_mcp_instance: FastMCP | None = None
+# Module-level state for cross-module access (recipe admin hooks).
 _tool_registry: _ToolRegistry | None = None
 
 
@@ -34,91 +39,59 @@ class _ToolRegistry:
         self.mcp = mcp
         self.internal_url = internal_url
         self._registered_tools: set[str] = set()
-        self._app: Any = None  # Set after mount
-        self._registry: Any = None  # Direct registry reference
+        self._registry: Any = None  # Direct RecipeRegistry reference
 
-    async def rebuild_tools(self) -> None:
-        """Rebuild tools from the registry (direct) or via HTTP (fallback)."""
-        sites = self._get_sites_from_registry()
-        if sites is None:
-            sites = await self._get_sites_from_http()
-        if sites is None:
+    # ------------------------------------------------------------------
+    # Public
+    # ------------------------------------------------------------------
+
+    def build_tools(self) -> None:
+        """(Re)build MCP tools from the current recipe registry."""
+        if self._registry is None:
+            logger.warning("No recipe registry available for MCP tool build")
             return
 
-    def _get_sites_from_registry(self) -> list[dict] | None:
-        """Get recipe data directly from the app registry (no HTTP needed)."""
-        try:
-            registry = self._registry
-            if registry is None and self._app is not None:
-                registry = getattr(self._app.state, "registry", None)
-            if registry is None:
-                return None
-            sites = []
-            for recipe in registry.list_all():
-                cfg = recipe.config
-                endpoints = []
-                for ep_name, ep_cfg in cfg.endpoints.items():
-                    ep_params = {}
-                    for pname, pcfg in ep_cfg.params.items():
-                        ep_params[pname] = {
-                            "description": pcfg.description,
-                            "required": pcfg.required,
-                            "example": pcfg.example,
-                        }
-                    endpoints.append({
-                        "name": ep_name,
-                        "description": ep_cfg.description,
-                        "requires_query": ep_cfg.requires_query,
-                        "params": ep_params,
-                    })
-                sites.append({
-                    "slug": cfg.slug,
-                    "name": cfg.name,
-                    "description": cfg.description,
-                    "endpoints": endpoints,
-                })
-            return sites
-        except Exception as e:
-            logger.debug("Could not read from registry directly: %s", e)
-            return None
+        sites = sites_from_registry(self._registry)
+        self._clear_tools()
+        self._register_all(sites)
+        logger.info(
+            "MCP tools built: %d tools from %d recipes",
+            len(self._registered_tools),
+            len(sites),
+        )
 
-    async def _get_sites_from_http(self) -> list[dict] | None:
-        """Fallback: fetch recipe data via HTTP."""
-        async with httpx.AsyncClient(timeout=30) as client:
-            try:
-                resp = await client.get(f"{self.internal_url}/api/sites")
-                resp.raise_for_status()
-                return resp.json()
-            except Exception as e:
-                logger.error("Failed to fetch recipes for MCP tool rebuild: %s", e)
-                return None
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
 
-        # Remove previously registered dynamic tools
-        for tool_name in self._registered_tools:
+    def _clear_tools(self) -> None:
+        for name in list(self._registered_tools):
             try:
-                self.mcp.remove_tool(tool_name)
+                self.mcp.remove_tool(name)
             except Exception:
                 pass
         self._registered_tools.clear()
 
-        # Register each endpoint as a tool
+    def _register_all(self, sites: list[dict]) -> None:
         for site in sites:
-            slug = site.get("slug", "")
-            site_name = site.get("name", slug)
+            slug = site["slug"]
+            site_name = site["name"]
+            base_url = site.get("base_url", "")
 
-            for ep in site.get("endpoints", []):
-                ep_name = ep.get("name", "")
+            for ep in site["endpoints"]:
+                ep_name = ep["name"]
                 ep_desc = ep.get("description", "")
                 requires_q = ep.get("requires_query", False)
                 ep_params = ep.get("params", {})
 
-                tool_name = f"{slug}{TOOL_NAME_SEP}{ep_name}"
-                description = f"[{site_name}] {ep_desc}" if ep_desc else f"[{site_name}] {ep_name}"
+                tool_name = build_tool_name(slug, ep_name)
+                desc = f"[{site_name}] {ep_desc}" if ep_desc else f"[{site_name}] {ep_name}"
+                if base_url:
+                    desc += f" ({base_url})"
 
-                # Build the tool function dynamically
-                self._register_endpoint_tool(
+                self._register_tool(
                     tool_name=tool_name,
-                    description=description,
+                    description=desc,
                     slug=slug,
                     endpoint=ep_name,
                     requires_q=requires_q,
@@ -126,13 +99,7 @@ class _ToolRegistry:
                 )
                 self._registered_tools.add(tool_name)
 
-        logger.info(
-            "MCP tools rebuilt: %d tools from %d recipes",
-            len(self._registered_tools),
-            len(sites),
-        )
-
-    def _register_endpoint_tool(
+    def _register_tool(
         self,
         *,
         tool_name: str,
@@ -142,29 +109,25 @@ class _ToolRegistry:
         requires_q: bool,
         extra_params: dict[str, Any],
     ) -> None:
-        """Register a single recipe endpoint as an MCP tool."""
+        # Capture for closure
+        _slug, _endpoint, _url = slug, endpoint, self.internal_url
 
-        # Capture variables for the closure
-        _slug = slug
-        _endpoint = endpoint
-        _internal_url = self.internal_url
-
-        # Build parameter docstring
-        param_docs = []
+        # Build human-readable parameter docs
+        param_docs: list[str] = []
         if requires_q:
             param_docs.append("q: The search query or prompt (required)")
         for pname, pcfg in extra_params.items():
             pdesc = pcfg.get("description", "")
-            preq = pcfg.get("required", False)
-            suffix = " (required)" if preq else " (optional)"
+            suffix = " (required)" if pcfg.get("required") else " (optional)"
             param_docs.append(f"{pname}: {pdesc}{suffix}")
 
-        full_description = description
+        full_desc = description
         if param_docs:
-            full_description += "\n\nParameters:\n" + "\n".join(f"  - {p}" for p in param_docs)
+            full_desc += "\n\nParameters:\n" + "\n".join(f"  - {p}" for p in param_docs)
 
-        async def _tool_fn(**kwargs: str) -> str:
-            url = f"{_internal_url}/{_slug}/{_endpoint}"
+        # --- tool function ---
+        async def _fn(**kwargs: str) -> str:
+            url = f"{_url}/{_slug}/{_endpoint}"
             params: dict[str, str] = {"page": "1"}
             q = kwargs.get("q", "")
             if q:
@@ -182,79 +145,50 @@ class _ToolRegistry:
                 except httpx.RequestError as e:
                     return f"Error: {e}"
 
-            data = resp.json()
-            error = data.get("error")
-            if error:
-                return f"Error: {error.get('message', 'unknown error')}"
+            return format_tool_result(resp.json())
 
-            items = data.get("items", [])
-            if not items:
-                return "No results found."
+        _fn.__name__ = tool_name
+        _fn.__doc__ = full_desc
 
-            results = []
-            for item in items:
-                fields = item.get("fields", {})
-                title = item.get("title", "")
-                url_field = item.get("url", "")
-
-                for key in ("response", "answer", "text", "content", "result"):
-                    if key in fields:
-                        if len(items) == 1:
-                            return str(fields[key])
-                        results.append(str(fields[key]))
-                        break
-                else:
-                    parts = []
-                    if title:
-                        parts.append(f"**{title}**")
-                    if url_field:
-                        parts.append(url_field)
-                    for k, v in fields.items():
-                        parts.append(f"{k}: {v}")
-                    results.append("\n".join(parts))
-
-            return "\n\n---\n\n".join(results)
-
-        # Set function metadata for MCP SDK
-        _tool_fn.__name__ = tool_name
-        _tool_fn.__doc__ = full_description
-
-        # Build proper function signature for MCP schema generation
-        import inspect
-
-        params_list = []
+        # Build typed signature so the MCP SDK generates proper JSON Schema
+        sig_params: list[inspect.Parameter] = []
         if requires_q:
-            params_list.append(
+            sig_params.append(
                 inspect.Parameter("q", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=str)
             )
         else:
-            params_list.append(
+            sig_params.append(
                 inspect.Parameter("q", inspect.Parameter.POSITIONAL_OR_KEYWORD, default="", annotation=str)
             )
-
-        for pname, pcfg in extra_params.items():
-            params_list.append(
-                inspect.Parameter(
-                    pname,
-                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                    default="",
-                    annotation=str,
-                )
+        for pname in extra_params:
+            sig_params.append(
+                inspect.Parameter(pname, inspect.Parameter.POSITIONAL_OR_KEYWORD, default="", annotation=str)
             )
 
-        _tool_fn.__signature__ = inspect.Signature(
-            parameters=params_list,
-            return_annotation=str,
-        )
-        _tool_fn.__annotations__ = {"return": str}
+        _fn.__signature__ = inspect.Signature(parameters=sig_params, return_annotation=str)
+        _fn.__annotations__ = {"return": str}
 
-        # Register with FastMCP
-        self.mcp.tool(name=tool_name, description=full_description)(_tool_fn)
+        self.mcp.tool(name=tool_name, description=full_desc)(_fn)
 
 
-def create_mcp_server() -> FastMCP:
-    """Create a FastMCP server with dynamically registered recipe tools."""
-    global _mcp_instance, _tool_registry
+# ----------------------------------------------------------------------
+# Public API
+# ----------------------------------------------------------------------
+
+def rebuild_mcp_tools() -> None:
+    """Rebuild MCP tools from current recipes. Call after recipe changes."""
+    if _tool_registry is not None:
+        _tool_registry.build_tools()
+
+
+def mount_mcp_server(app: Any, registry: Any = None) -> None:
+    """Mount the MCP protocol server onto a FastAPI app at ``/mcp``.
+
+    Args:
+        app: The FastAPI application instance.
+        registry: A populated ``RecipeRegistry`` to read recipes from.
+    """
+    global _tool_registry
 
     mcp = FastMCP(
         "Web2API",
@@ -271,30 +205,13 @@ def create_mcp_server() -> FastMCP:
         ),
     )
 
-    _mcp_instance = mcp
     _tool_registry = _ToolRegistry(mcp)
+    _tool_registry._registry = registry
 
-    return mcp
+    # Build tools now (registry is already populated at this point).
+    _tool_registry.build_tools()
 
-
-async def rebuild_mcp_tools() -> None:
-    """Rebuild MCP tools from current recipes. Call after recipe changes."""
-    _build_tools_sync()
-
-
-def mount_mcp_server(app: Any, registry: Any = None) -> None:
-    """Mount the MCP server onto a FastAPI/Starlette app at /mcp."""
-    mcp = create_mcp_server()
-
-    # Give the tool registry access to the app for direct registry reads
-    if _tool_registry is not None:
-        _tool_registry._app = app
-        _tool_registry._registry = registry
-
-    # Build tools synchronously from the registry right now
-    _build_tools_sync()
-
-    # The MCP session manager needs to run within the app's lifespan
+    # The MCP session manager must run within the app's lifespan.
     from contextlib import asynccontextmanager
 
     original_lifespan = getattr(app.router, "lifespan_context", None)
@@ -313,44 +230,3 @@ def mount_mcp_server(app: Any, registry: Any = None) -> None:
     mcp_app = mcp.streamable_http_app()
     app.mount("/mcp", mcp_app)
     logger.info("MCP protocol server mounted at /mcp")
-
-
-def _build_tools_sync() -> None:
-    """Build tools from the registry synchronously (no HTTP needed)."""
-    if _tool_registry is None:
-        return
-    sites = _tool_registry._get_sites_from_registry()
-    if sites is None:
-        logger.warning("No recipe registry available for MCP tool build")
-        return
-
-    # Remove old tools
-    for tool_name in list(_tool_registry._registered_tools):
-        try:
-            _tool_registry.mcp.remove_tool(tool_name)
-        except Exception:
-            pass
-    _tool_registry._registered_tools.clear()
-
-    # Register new tools
-    for site in sites:
-        slug = site.get("slug", "")
-        site_name = site.get("name", slug)
-        for ep in site.get("endpoints", []):
-            ep_name = ep.get("name", "")
-            ep_desc = ep.get("description", "")
-            requires_q = ep.get("requires_query", False)
-            ep_params = ep.get("params", {})
-            tool_name = f"{slug}{TOOL_NAME_SEP}{ep_name}"
-            description = f"[{site_name}] {ep_desc}" if ep_desc else f"[{site_name}] {ep_name}"
-            _tool_registry._register_endpoint_tool(
-                tool_name=tool_name,
-                description=description,
-                slug=slug,
-                endpoint=ep_name,
-                requires_q=requires_q,
-                extra_params=ep_params,
-            )
-            _tool_registry._registered_tools.add(tool_name)
-
-    logger.info("MCP tools built: %d tools from %d recipes", len(_tool_registry._registered_tools), len(sites))

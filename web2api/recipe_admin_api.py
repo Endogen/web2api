@@ -41,19 +41,9 @@ async def _reload_registry_and_tools(app: FastAPI, *, app_version: str) -> None:
     # Rebuild MCP tools so connected clients see the change
     try:
         from web2api.mcp_server import rebuild_mcp_tools
-        await rebuild_mcp_tools()
+        rebuild_mcp_tools()
     except Exception:
         pass  # MCP server may not be mounted
-
-
-def _reload_registry(app: FastAPI, *, app_version: str) -> None:
-    """Sync wrapper — use _reload_registry_and_tools when in async context."""
-    registry = RecipeRegistry(
-        app_version=app_version,
-        enforce_plugin_compatibility=app.state.enforce_plugin_compatibility,
-    )
-    registry.discover(app.state.recipes_dir)
-    app.state.registry = registry
 
 
 def register_recipe_admin_routes(app: FastAPI, *, app_version: str) -> None:
