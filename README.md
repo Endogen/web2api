@@ -247,6 +247,79 @@ curl -s "http://localhost:8010/{slug}/{endpoint}?q=hello&page=1" | jq
 For custom scraper parameters beyond `page` and `q`, check the specific recipe folder
 (`recipes/<slug>/scraper.py`).
 
+## MCP Server (Model Context Protocol)
+
+Web2API includes a built-in MCP server that automatically exposes all installed recipes as
+native tools for AI assistants. Every recipe endpoint becomes its own tool — no configuration
+needed. Install a recipe, and it's instantly available as an MCP tool.
+
+### Connecting Claude Desktop
+
+Web2API uses [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http)
+transport. Claude Desktop requires a local stdio bridge:
+
+Add to your `claude_desktop_config.json`
+([location](https://modelcontextprotocol.io/quickstart/user#configure-claude-for-desktop)):
+
+```json
+{
+  "mcpServers": {
+    "web2api": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://your-web2api-host/mcp/"]
+    }
+  }
+}
+```
+
+> **Requires Node.js ≥ 18** on the machine running Claude Desktop.
+
+### Connecting Claude Code
+
+```bash
+claude mcp add --transport http web2api https://your-web2api-host/mcp/
+```
+
+### Connecting Other MCP Clients
+
+Any MCP client that supports Streamable HTTP transport can connect directly:
+
+```
+URL: https://your-web2api-host/mcp/
+Transport: Streamable HTTP
+```
+
+### How It Works
+
+- Each recipe endpoint registers as a separate MCP tool  
+  (e.g. `brave-search__search`, `deepl__de-en`, `allenai__olmo-32b`)
+- Tools include proper descriptions and typed parameter schemas
+- When recipes are installed/uninstalled via the admin API, tools rebuild automatically
+- No authentication required (secure the endpoint via your reverse proxy if needed)
+
+### Example Tools
+
+After installing the `brave-search` and `deepl` recipes:
+
+| Tool | Description | Parameters |
+|---|---|---|
+| `brave-search__search` | Web search via Brave | `q` (required) |
+| `deepl__de-en` | Translate German → English | `q` (required) |
+| `deepl__en-de` | Translate English → German | `q` (required) |
+
+### HTTP Bridge (Legacy)
+
+A simpler HTTP-based tool bridge is also available for non-MCP clients:
+
+| Endpoint | Description |
+|---|---|
+| `GET /mcp/tools` | List all tools as JSON |
+| `GET /mcp/tools?only=brave-search` | Filter by recipe slug |
+| `GET /mcp/tools?exclude=allenai` | Exclude recipe slugs |
+| `GET /mcp/exclude/{slugs}/tools` | Path-based exclusion filter |
+| `GET /mcp/only/{slugs}/tools` | Path-based inclusion filter |
+| `POST /mcp/tools/{tool_name}` | Call a tool (JSON body with params) |
+
 ## API
 
 ### Discovery
