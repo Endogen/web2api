@@ -1322,11 +1322,13 @@
           if (!mcpList) return;
           mcpList.replaceChildren();
 
-          // Group by recipe slug
+          // Group by recipe slug (from API field, fallback to name prefix)
           const grouped = {};
           tools.forEach((tool) => {
-            const sep = tool.name.indexOf("__");
-            const slug = sep > -1 ? tool.name.substring(0, sep) : tool.name;
+            const slug = tool.slug || (() => {
+              const sep = tool.name.indexOf("__");
+              return sep > -1 ? tool.name.substring(0, sep) : tool.name;
+            })();
             if (!grouped[slug]) grouped[slug] = [];
             grouped[slug].push(tool);
           });

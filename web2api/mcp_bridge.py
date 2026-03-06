@@ -102,6 +102,7 @@ def _tools_from_registry(registry: RecipeRegistry) -> list[dict[str, Any]]:
                 "name": tool_name,
                 "description": description,
                 "parameters": _build_tool_parameters(ep_cfg),
+                "slug": slug,
             })
 
     return tools
