@@ -13,7 +13,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
@@ -178,7 +178,11 @@ def _cache_key_for_request(
     query: str | None,
     extra_params: dict[str, str] | None,
 ) -> CacheKey:
-    params = tuple(sorted(extra_params.items())) if extra_params else ()
+    if extra_params:
+        # Exclude non-hashable values (e.g. file_paths list) from cache key
+        params = tuple(sorted((k, v) for k, v in extra_params.items() if isinstance(v, str)))
+    else:
+        params = ()
     return (slug, endpoint, page, query, params)
 
 
@@ -198,6 +202,12 @@ async def _serve_recipe_endpoint(
 ) -> JSONResponse:
     """Serve a recipe endpoint request with cache support."""
     extra_params, extra_error = _collect_extra_params(request)
+    # Attach uploaded file paths if present (from POST multipart)
+    file_paths = getattr(getattr(request, "state", None), "file_paths", None)
+    if file_paths:
+        if extra_params is None:
+            extra_params = {}
+        extra_params["file_paths"] = file_paths  # type: ignore[assignment]
     if extra_error is not None:
         response = _build_error_response(
             recipe=recipe,
@@ -225,6 +235,9 @@ async def _serve_recipe_endpoint(
 
     response_cache: ResponseCache | None = getattr(request.app.state, "response_cache", None)
     cache_key: CacheKey | None = None
+    # Skip cache for file upload requests
+    if file_paths:
+        response_cache = None
     if response_cache is not None:
         cache_key = _cache_key_for_request(
             slug=recipe.config.slug,
@@ -443,6 +456,54 @@ def create_app(
             page=page,
             q=q,
         )
+
+    @app.post("/{slug}/{endpoint}")
+    async def recipe_endpoint_post(
+        request: Request,
+        slug: str,
+        endpoint: str,
+        page: int = Query(default=1, ge=1),
+        q: str | None = Query(default=None),
+        files: list[UploadFile] = File(default=[]),
+    ) -> JSONResponse:
+        """Serve recipe endpoints with file upload support (POST multipart)."""
+        registry_state: RecipeRegistry = request.app.state.registry
+        recipe = registry_state.get(slug)
+        if recipe is None or endpoint not in recipe.config.endpoints:
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        # Save uploaded files to temp directory
+        import tempfile
+        saved_paths: list[str] = []
+        temp_dir = None
+        try:
+            if files:
+                temp_dir = tempfile.mkdtemp(prefix="web2api_upload_")
+                for upload in files:
+                    if upload.filename:
+                        dest = os.path.join(temp_dir, upload.filename)
+                        content = await upload.read()
+                        with open(dest, "wb") as f:
+                            f.write(content)
+                        saved_paths.append(dest)
+
+            # Inject file_paths into the request query string so
+            # _collect_extra_params won't see it but the scraper will.
+            # We pass it via a custom request state attribute instead.
+            request.state.file_paths = saved_paths
+
+            return await _serve_recipe_endpoint(
+                request,
+                recipe=recipe,
+                endpoint_name=endpoint,
+                page=page,
+                q=q,
+            )
+        finally:
+            # Clean up temp files
+            if temp_dir:
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
     return app
 
