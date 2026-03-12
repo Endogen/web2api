@@ -128,33 +128,12 @@
 
       .auth-input-wrap {
         flex: 1 1 320px;
-        position: relative;
-        display: flex;
-        align-items: center;
       }
 
       .auth-input-wrap .filter {
         width: 100%;
-        padding: 0.24rem 2.4rem 0.24rem 0.48rem;
+        padding: 0.24rem 0.48rem;
         font-size: 0.74rem;
-      }
-
-      .auth-toggle {
-        position: absolute;
-        right: 0.4rem;
-        background: none;
-        border: none;
-        cursor: pointer;
-        color: var(--ink-dim);
-        font-size: 0.82rem;
-        padding: 0.1rem;
-        line-height: 1;
-        opacity: 0.6;
-        transition: opacity 150ms;
-      }
-
-      .auth-toggle:hover {
-        opacity: 1;
       }
 
       .auth-status-dot {
@@ -705,7 +684,6 @@
                 autocomplete="current-password"
                 spellcheck="false"
               />
-              <button class="auth-toggle" id="authToggleVis" type="button" title="Show/hide token">👁</button>
             </div>
             <button class="manager-btn" id="authSave" type="button">Save</button>
             <button class="manager-btn" id="authClear" type="button">Clear</button>
@@ -1689,17 +1667,6 @@
 
         if (mcpReload) {
           mcpReload.addEventListener("click", () => void loadMcpTools());
-        }
-
-        // Show/hide token toggle
-        const authToggle = document.getElementById("authToggleVis");
-        if (authToggle && authTokenInput) {
-          authToggle.addEventListener("click", () => {
-            const isPassword = authTokenInput.type === "password";
-            authTokenInput.type = isPassword ? "text" : "password";
-            authToggle.textContent = isPassword ? "🙈" : "👁";
-            authToggle.title = isPassword ? "Hide token" : "Show token";
-          });
         }
 
         // Auth status dot
