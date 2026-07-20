@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 from web2api.config import RecipeConfig
 from web2api.engine import scrape
 from web2api.registry import Recipe
+from web2api.scraper import BaseScraper, ScrapeResult
 
 
 class FakeJSHandle:
@@ -73,6 +75,9 @@ class FakePage:
     async def goto(self, url: str) -> None:
         self.goto_calls.append(url)
 
+    async def route(self, pattern: str, handler: object) -> None:
+        self.action_log.append(("route", pattern, handler))
+
     async def query_selector_all(self, selector: str) -> list[FakeElement]:
         return self.selector_all_map.get(selector, [])
 
@@ -102,10 +107,12 @@ class FakePool:
 
     def __init__(self, page: FakePage) -> None:
         self._page = page
+        self.page_calls = 0
 
     @asynccontextmanager
     async def page(self, timeout: float | None = None) -> AsyncIterator[FakePage]:
         _ = timeout
+        self.page_calls += 1
         yield self._page
 
 
@@ -252,15 +259,16 @@ async def test_scrape_executes_actions() -> None:
     response = await scrape(pool=FakePool(page), recipe=recipe, endpoint="read", page=1)
 
     assert response.error is None
-    assert page.action_log[:5] == [
+    action_log = [entry for entry in page.action_log if entry[0] != "route"]
+    assert action_log[:5] == [
         ("wait", ".ready", 1000),
         ("click", ".next"),
         ("type", "input[name=q]", "python"),
         ("sleep", 10),
         ("evaluate", "window.test = true", None),
     ]
-    assert page.action_log[5][0] == "evaluate"
-    assert page.action_log[5][2] == 200
+    assert action_log[5][0] == "evaluate"
+    assert action_log[5][2] == 200
 
 
 @pytest.mark.asyncio
@@ -312,3 +320,42 @@ async def test_scrape_requires_query_validation() -> None:
 
     assert response.error is not None
     assert response.error.code == "INVALID_PARAMS"
+
+
+@pytest.mark.asyncio
+async def test_direct_custom_scraper_does_not_acquire_browser_page() -> None:
+    class DirectScraper(BaseScraper):
+        requires_browser = False
+
+        def supports(self, endpoint: str) -> bool:
+            return endpoint == "read"
+
+        async def scrape(
+            self,
+            endpoint: str,
+            page: Any,
+            params: dict[str, Any],
+        ) -> ScrapeResult:
+            assert page is None
+            return ScrapeResult(items=[{"title": "direct"}])
+
+    recipe = _build_recipe({
+        "read": {
+            "url": "https://example.com",
+            "items": {"container": "body", "fields": {"title": {"selector": "h1"}}},
+            "pagination": {"type": "page_param", "param": "page"},
+        }
+    })
+    recipe.scraper = DirectScraper()
+    pool = FakePool(FakePage())
+
+    response = await scrape(
+        pool=pool,
+        recipe=recipe,
+        endpoint="read",
+        direct_semaphore=asyncio.Semaphore(1),
+    )
+
+    assert response.error is None
+    assert response.items[0].title == "direct"
+    assert pool.page_calls == 0

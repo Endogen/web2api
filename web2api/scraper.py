@@ -25,12 +25,14 @@ class BaseScraper(ABC):
     """Base class for optional recipe-specific scraper implementations.
 
     Subclasses override ``scrape()`` to handle one or more named endpoints.
-    The ``page`` is a **blank** Playwright page — no URL has been loaded.
-    The scraper must navigate to the target URL itself.
+    Browser scrapers receive a blank Playwright page. Direct HTTP or CLI
+    scrapers set ``requires_browser = False`` and receive ``None`` instead.
 
     ``params`` contains ``page`` (int, 1-based page number) and ``query``
     (str | None).
     """
+
+    requires_browser = True
 
     def supports(self, endpoint: str) -> bool:
         """Return ``True`` when this scraper handles *endpoint*.
@@ -40,11 +42,15 @@ class BaseScraper(ABC):
         """
         return False
 
-    async def scrape(self, endpoint: str, page: Page, params: dict[str, Any]) -> ScrapeResult:
+    async def scrape(
+        self,
+        endpoint: str,
+        page: Page | None,
+        params: dict[str, Any],
+    ) -> ScrapeResult:
         """Scrape content for the given endpoint.
 
-        The ``page`` is a **blank** Playwright page — no URL has been loaded.
-        The scraper must navigate to the target URL itself (e.g. via
-        ``await page.goto(...)``).
+        Browser scrapers receive a blank, network-guarded page and must
+        navigate it themselves. Direct scrapers receive ``None``.
         """
         raise NotImplementedError(f"endpoint '{endpoint}' is not implemented")

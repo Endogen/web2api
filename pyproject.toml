@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "web2api"
-version = "0.4.1"
+version = "0.5.0"
 description = "Turn websites into REST APIs via live Playwright scraping."
 requires-python = ">=3.12"
 dependencies = [
@@ -52,3 +52,7 @@ select = ["E", "F", "I", "UP"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = "-m 'not e2e'"
+markers = [
+  "e2e: Docker-backed live-network end-to-end tests",
+]

@@ -110,3 +110,30 @@ def test_public_auth_payload_describes_public_and_protected_surfaces() -> None:
     assert payload["protected_surfaces"] == ["all routes except configured public path patterns"]
     assert payload["public_surfaces"] == ["/", "/health", "/api/sites"]
     assert payload["public_paths_env"] == "WEB2API_PUBLIC_PATHS"
+
+
+def test_admin_api_fails_closed_without_any_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WEB2API_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("WEB2API_ACCESS_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("WEB2API_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("WEB2API_ALLOW_UNAUTHENTICATED_ADMIN", raising=False)
+
+    config = load_auth_config()
+
+    assert config.admin_is_disabled("/api/recipes/manage") is True
+    assert config.requires_auth("/api/recipes/manage/install/demo") is True
+
+
+def test_admin_token_is_distinct_from_general_access_token() -> None:
+    config = AuthConfig(access_token="read-token", admin_token="admin-token")
+    headers = Headers({"authorization": "Bearer read-token"})
+
+    assert request_is_authorized(headers, config, path="/alpha/read") is True
+    assert request_is_authorized(headers, config, path="/api/recipes/manage") is False
+    assert request_is_authorized(
+        Headers({"authorization": "Bearer admin-token"}),
+        config,
+        path="/api/recipes/manage",
+    ) is True

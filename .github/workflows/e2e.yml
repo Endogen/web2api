@@ -1,0 +1,20 @@
+name: Docker E2E
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install uv==0.6.11
+      - run: uv sync --frozen --dev
+      - run: uv run pytest -m e2e tests/e2e -v

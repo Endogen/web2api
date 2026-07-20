@@ -73,6 +73,7 @@ curl -s http://localhost:8010/api/sites | jq
 ```bash
 git clone https://github.com/Endogen/web2api.git
 cd web2api
+export WEB2API_ADMIN_TOKEN="replace-with-a-long-random-token"
 docker compose up --build -d
 ```
 
@@ -109,6 +110,11 @@ docker compose exec web2api web2api recipes catalog add hackernews --yes
 ## Access Token
 
 Web2API can protect all HTTP routes except selected public paths with a shared access token.
+
+The recipe-management API is fail-closed even when general route authentication is disabled.
+Set `WEB2API_ADMIN_TOKEN` (or the general `WEB2API_ACCESS_TOKEN`) before using
+`/api/recipes/manage`. Development-only deployments can opt out with
+`WEB2API_ALLOW_UNAUTHENTICATED_ADMIN=true`.
 
 Set one of:
 - `WEB2API_ACCESS_TOKEN`
@@ -210,6 +216,8 @@ Catalog defaults come from:
 - `WEB2API_RECIPE_CATALOG_PATH` (catalog file path inside source, default `catalog.yaml`)
 If `WEB2API_RECIPE_CATALOG_SOURCE` is unset, Web2API uses the official remote repo
 `https://github.com/Endogen/web2api-recipes.git`.
+For repeatable production installs, set `WEB2API_RECIPE_CATALOG_REF` to an immutable commit SHA;
+the installer also records the installed recipe tree hash in its manifest.
 `recipes update` works only for recipes tracked in the manifest.
 
 Catalog entries can include optional setup hints:
@@ -368,7 +376,7 @@ Transport: Streamable HTTP
 ### How It Works
 
 - Each recipe endpoint registers as a separate MCP tool  
-  (e.g. `brave-search_search`, `deepl_de-en`, `allenai_olmo-32b`)
+  (e.g. `brave-search__search`, `deepl__de-en`, `allenai__olmo-32b`)
 - Tools include proper descriptions and typed parameter schemas
 - When recipes are installed/uninstalled via the admin API, tools rebuild automatically
 - Optional access-token protection is available via `WEB2API_ACCESS_TOKEN`
@@ -379,9 +387,13 @@ After installing the `brave-search` and `deepl` recipes:
 
 | Tool | Description | Parameters |
 |---|---|---|
-| `brave-search_search` | Web search via Brave | `q` (required) |
-| `deepl_de-en` | Translate German → English | `q` (required) |
-| `deepl_en-de` | Translate English → German | `q` (required) |
+| `brave-search__search` | Web search via Brave | `q` (required), `page` |
+| `deepl__de-en` | Translate German → English | `q` (required), `page` |
+| `deepl__en-de` | Translate English → German | `q` (required), `page` |
+
+Legacy single-underscore tool calls are still resolved by the HTTP bridge. Native tool discovery
+uses the unambiguous double-underscore form. For non-local MCP hostnames, configure
+`WEB2API_MCP_ALLOWED_HOSTS` and `WEB2API_MCP_ALLOWED_ORIGINS` explicitly.
 
 ### HTTP Bridge (Legacy)
 
@@ -546,12 +558,18 @@ endpoints:
 | `url` | yes | URL template with `{page}`, `{page_zero}`, `{query}` placeholders |
 | `description` | no | Human-readable endpoint description |
 | `requires_query` | no | If `true`, the `q` parameter is mandatory (default: `false`) |
+| `params` | no | Declared extra parameters; undeclared inputs are rejected |
+| `accepts_files` | no | Allow bounded multipart uploads for this endpoint (default: `false`) |
 | `actions` | no | Playwright actions to run before extraction |
 | `items` | yes | Container selector + field definitions |
 | `pagination` | yes | Pagination strategy (`page_param`, `offset_param`, or `next_link`) |
 
 Pagination notes:
 `{page}` resolves to `start + ((api_page - 1) * step)`.
+
+Extra parameters support `type` (`string`, `integer`, `number`, `boolean`), `required`, `enum`,
+`minimum`, `maximum`, `pattern`, `min_length`, `max_length`, and `example`. These constraints are
+used consistently by REST validation and MCP schemas.
 
 ### Actions
 
@@ -602,6 +620,12 @@ class Scraper(BaseScraper):
 - `params` also includes validated extra query params (for example `count`)
 - Endpoints not handled by the scraper fall back to declarative YAML
 
+For a direct HTTP or CLI implementation, set `requires_browser = False`; its `page` argument is
+then `None` and it runs under the bounded direct-executor semaphore instead of consuming a browser
+context. Browser and direct outbound HTTP requests reject loopback, private, link-local, and
+reserved destinations by default. Operators can explicitly allow internal providers with
+`WEB2API_ALLOW_PRIVATE_NETWORK=true`.
+
 ### Plugin Metadata (Optional)
 
 Use `plugin.yaml` to declare install/runtime requirements for a recipe:
@@ -622,7 +646,7 @@ dependencies:
   apt:
     - nodejs
   npm:
-    - "@steipete/bird"
+    - "@steipete/bird@0.8.0"
 healthcheck:
   command: ["bird", "--version"]
 ```
@@ -651,6 +675,7 @@ Environment variables (with defaults):
 | `POOL_PAGE_TIMEOUT` | 15000 | Page navigation timeout (ms) |
 | `POOL_QUEUE_SIZE` | 20 | Max queued requests |
 | `SCRAPE_TIMEOUT` | 30 | Overall scrape timeout (seconds) |
+| `DIRECT_MAX_CONCURRENCY` | 20 | Maximum concurrent direct HTTP/CLI scraper calls |
 | `CACHE_ENABLED` | true | Enable in-memory response caching |
 | `CACHE_TTL_SECONDS` | 30 | Fresh cache duration in seconds |
 | `CACHE_STALE_TTL_SECONDS` | 120 | Stale-while-revalidate window in seconds |
@@ -662,7 +687,14 @@ Environment variables (with defaults):
 | `PLUGIN_ENFORCE_COMPATIBILITY` | false | Skip plugin recipes outside declared `web2api` version bounds |
 | `WEB2API_ACCESS_TOKEN` | empty | Shared access token for all routes except public paths |
 | `WEB2API_ACCESS_TOKEN_FILE` | empty | Path to file containing the access token (alternative to `WEB2API_ACCESS_TOKEN`) |
+| `WEB2API_ADMIN_TOKEN` | empty | Separate token for recipe-management routes; admin is disabled if no general/admin token is set |
+| `WEB2API_ALLOW_UNAUTHENTICATED_ADMIN` | false | Development-only opt-out for fail-closed admin routes |
 | `WEB2API_PUBLIC_PATHS` | empty | Extra public path patterns to allow without auth while token auth is enabled |
+| `WEB2API_ALLOW_PRIVATE_NETWORK` | false | Explicitly allow recipe traffic to private/internal network targets |
+| `WEB2API_MAX_UPLOAD_FILES` | 4 | Maximum multipart files per request |
+| `WEB2API_MAX_UPLOAD_BYTES` | 26214400 | Maximum bytes per uploaded file |
+| `WEB2API_MCP_ALLOWED_HOSTS` | local hosts | Allowed MCP Host header patterns |
+| `WEB2API_MCP_ALLOWED_ORIGINS` | local origins | Allowed MCP Origin patterns |
 | `BIRD_AUTH_TOKEN` | empty | X/Twitter auth token for `x` recipe |
 | `BIRD_CT0` | empty | X/Twitter ct0 token for `x` recipe |
 
@@ -671,6 +703,9 @@ Environment variables (with defaults):
 ```bash
 # Inside the container or with deps installed:
 pytest tests/unit tests/integration --timeout=30 -x -q
+
+# Explicit, bounded Docker/live-network suite
+pytest -m e2e tests/e2e -v
 ```
 
 ## Tech Stack

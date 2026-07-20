@@ -36,6 +36,9 @@ DOCKER_UNAVAILABLE_MARKERS = (
     "docker daemon",
     "cannot connect to the docker engine",
 )
+COMPOSE_COMMAND_TIMEOUT_SECONDS = 300
+
+pytestmark = pytest.mark.e2e
 
 
 def _docker_compose_base_cmd() -> list[str]:
@@ -49,6 +52,7 @@ def _docker_compose_base_cmd() -> list[str]:
         capture_output=True,
         text=True,
         check=False,
+        timeout=30,
     )
     if version_result.returncode != 0:
         combined = f"{version_result.stdout}\n{version_result.stderr}".strip()
@@ -97,14 +101,21 @@ def _run_compose(
     env: dict[str, str],
     check: bool,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        [*base_cmd, *args],
-        cwd=PROJECT_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [*base_cmd, *args],
+            cwd=PROJECT_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=COMPOSE_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(
+            "docker compose "
+            f"{' '.join(args)} exceeded {COMPOSE_COMMAND_TIMEOUT_SECONDS}s: {exc}"
+        )
     if check and result.returncode != 0:
         combined = f"{result.stdout}\n{result.stderr}".strip()
         if _is_docker_unavailable(combined):
@@ -137,6 +148,7 @@ def dockerized_web2api() -> Iterator[str]:
     env["COMPOSE_PROJECT_NAME"] = compose_project
     host_port = _allocate_host_port()
     env["WEB2API_HOST_PORT"] = str(host_port)
+    env["WEB2API_ALLOW_UNAUTHENTICATED_ADMIN"] = "true"
     base_url = f"http://127.0.0.1:{host_port}"
 
     started = False

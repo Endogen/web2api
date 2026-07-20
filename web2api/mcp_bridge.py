@@ -26,7 +26,8 @@ def _resolve_tool(registry: RecipeRegistry, tool_name: str) -> tuple[str | None,
     """Resolve a tool name to (slug, endpoint_name).
 
     Checks custom ``tool_name`` overrides first, then falls back to the
-    standard ``{slug}_{endpoint}`` naming convention.
+    standard ``{slug}__{endpoint}`` naming convention. Legacy single-underscore
+    names are still accepted for existing clients.
     """
     # Check custom tool_name overrides
     for recipe in registry.list_all():
@@ -43,12 +44,24 @@ def _resolve_tool(registry: RecipeRegistry, tool_name: str) -> tuple[str | None,
         if recipe and ep_name in recipe.config.endpoints:
             return slug, ep_name
 
+    for recipe in registry.list_all():
+        for ep_name in recipe.config.endpoints:
+            if tool_name == f"{recipe.config.slug}_{ep_name}":
+                return recipe.config.slug, ep_name
+
     return None, None
 
 
 def _build_tool_parameters(endpoint_cfg: Any) -> dict[str, Any]:
     """Build a JSON Schema for the tool's input parameters."""
-    properties: dict[str, Any] = {}
+    properties: dict[str, Any] = {
+        "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1,
+            "description": "1-based result page.",
+        }
+    }
     required: list[str] = []
 
     if endpoint_cfg.requires_query:
@@ -59,11 +72,19 @@ def _build_tool_parameters(endpoint_cfg: Any) -> dict[str, Any]:
         required.append("q")
 
     for param_name, param_cfg in endpoint_cfg.params.items():
-        prop: dict[str, Any] = {"type": "string"}
+        prop: dict[str, Any] = {"type": param_cfg.type}
         if param_cfg.description:
             prop["description"] = param_cfg.description
-        if param_cfg.example:
+        if param_cfg.example is not None:
             prop["examples"] = [param_cfg.example]
+        for field in ("enum", "minimum", "maximum", "pattern"):
+            value = getattr(param_cfg, field)
+            if value is not None:
+                prop[field] = value
+        if param_cfg.min_length is not None:
+            prop["minLength"] = param_cfg.min_length
+        if param_cfg.max_length is not None:
+            prop["maxLength"] = param_cfg.max_length
         properties[param_name] = prop
         if param_cfg.required:
             required.append(param_name)
@@ -71,6 +92,7 @@ def _build_tool_parameters(endpoint_cfg: Any) -> dict[str, Any]:
     schema: dict[str, Any] = {
         "type": "object",
         "properties": properties,
+        "additionalProperties": False,
     }
     if required:
         schema["required"] = required
@@ -197,10 +219,17 @@ def register_mcp_routes(app: FastAPI) -> None:
             body = {}
 
         query = body.pop("q", None) or body.pop("query", None)
+        raw_page = body.pop("page", 1)
+        try:
+            page = int(raw_page)
+            if page < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="page must be an integer >= 1") from None
 
         from web2api.main import execute_recipe_endpoint
 
-        params: dict[str, str] = {"page": "1"}
+        params: dict[str, str] = {"page": str(page)}
         if query:
             params["q"] = str(query)
         for k, v in body.items():
@@ -211,7 +240,7 @@ def register_mcp_routes(app: FastAPI) -> None:
                 app=request.app,
                 recipe=recipe,
                 endpoint_name=endpoint_name,
-                page=1,
+                page=page,
                 q=str(query) if query is not None else None,
                 query_params=params,
             )

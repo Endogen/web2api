@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -136,13 +137,14 @@ class _ToolRegistry:
             full_desc += "\n\nParameters:\n" + "\n".join(f"  - {p}" for p in param_docs)
 
         # --- tool function ---
-        async def _fn(**kwargs: str) -> str:
-            params: dict[str, str] = {"page": "1"}
+        async def _fn(**kwargs: Any) -> str:
+            page = int(kwargs.get("page", 1))
+            params: dict[str, str] = {"page": str(page)}
             q = kwargs.get("q", "")
             if q:
                 params["q"] = str(q)
             for k, v in kwargs.items():
-                if k != "q" and v:
+                if k not in {"q", "page"} and v is not None and v != "":
                     params[k] = str(v)
 
             registry = self._current_registry()
@@ -160,7 +162,7 @@ class _ToolRegistry:
                     app=self.app,
                     recipe=recipe,
                     endpoint_name=_endpoint,
-                    page=1,
+                    page=page,
                     q=str(q) if q else None,
                     query_params=params,
                 )
@@ -178,6 +180,15 @@ class _ToolRegistry:
         annotations: dict[str, Any] = {}
         required_params: list[str] = []
         optional_params: list[str] = []
+        parameter_types: dict[str, Any] = {
+            pname: {
+                "string": str,
+                "integer": int,
+                "number": float,
+                "boolean": bool,
+            }.get(pcfg.get("type", "string"), str)
+            for pname, pcfg in extra_params.items()
+        }
 
         if requires_q:
             required_params.append("q")
@@ -190,24 +201,28 @@ class _ToolRegistry:
                 optional_params.append(pname)
 
         for pname in required_params:
+            annotation = parameter_types.get(pname, str)
             sig_params.append(
                 inspect.Parameter(
                     pname,
                     inspect.Parameter.KEYWORD_ONLY,
-                    annotation=str,
+                    annotation=annotation,
                 )
             )
-            annotations[pname] = str
+            annotations[pname] = annotation
+        optional_params.append("page")
         for pname in optional_params:
+            annotation = int if pname == "page" else parameter_types.get(pname, str)
+            default: Any = 1 if pname == "page" else ""
             sig_params.append(
                 inspect.Parameter(
                     pname,
                     inspect.Parameter.KEYWORD_ONLY,
-                    default="",
-                    annotation=str,
+                    default=default,
+                    annotation=annotation,
                 )
             )
-            annotations[pname] = str
+            annotations[pname] = annotation
         _fn.__signature__ = inspect.Signature(parameters=sig_params, return_annotation=str)
         _fn.__annotations__ = {**annotations, "return": str}
 
@@ -233,6 +248,22 @@ def mount_mcp_server(app: Any, registry: Any = None) -> None:
     """
     global _tool_registry
 
+    allowed_hosts = [
+        value.strip()
+        for value in os.environ.get(
+            "WEB2API_MCP_ALLOWED_HOSTS",
+            "127.0.0.1,127.0.0.1:*,localhost,localhost:*,[::1],[::1]:*,testserver",
+        ).split(",")
+        if value.strip()
+    ]
+    allowed_origins = [
+        value.strip()
+        for value in os.environ.get(
+            "WEB2API_MCP_ALLOWED_ORIGINS",
+            "http://127.0.0.1,http://127.0.0.1:*,http://localhost,http://localhost:*",
+        ).split(",")
+        if value.strip()
+    ]
     mcp = FastMCP(
         "Web2API",
         instructions=(
@@ -244,7 +275,9 @@ def mount_mcp_server(app: Any, registry: Any = None) -> None:
         streamable_http_path="/",
         stateless_http=True,
         transport_security=TransportSecuritySettings(
-            enable_dns_rebinding_protection=False,
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=allowed_hosts,
+            allowed_origins=allowed_origins,
         ),
     )
 

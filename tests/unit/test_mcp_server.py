@@ -73,7 +73,7 @@ def test_mcp_tool_signature_marks_required_extra_params_as_required() -> None:
     tool_registry = _ToolRegistry(mcp, app=app, bootstrap_registry=registry)
     tool_registry.build_tools()
 
-    tool_fn = mcp.tools["demo_read"]
+    tool_fn = mcp.tools["demo__read"]
     signature = tool_fn.__signature__
     params = list(signature.parameters.values())
 
@@ -83,3 +83,6 @@ def test_mcp_tool_signature_marks_required_extra_params_as_required() -> None:
     assert params[1].name == "q"
     assert params[1].kind == inspect.Parameter.KEYWORD_ONLY
     assert params[1].default == ""
+    assert params[2].name == "page"
+    assert params[2].annotation is int
+    assert params[2].default == 1

@@ -128,6 +128,10 @@ def test_discovery_loads_custom_scraper(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    save_manifest(
+        recipes_dir,
+        {"version": 1, "recipes": {"custom": {"trusted": True}}},
+    )
 
     registry = RecipeRegistry()
     registry.discover(recipes_dir)
@@ -137,6 +141,44 @@ def test_discovery_loads_custom_scraper(tmp_path: Path) -> None:
     assert recipe.scraper is not None
     assert recipe.scraper.supports("read") is True
     assert recipe.scraper.supports("search") is False
+
+
+@pytest.mark.parametrize("manifest_contents", [None, "{broken json"])
+def test_discovery_fails_closed_when_manifest_is_missing_or_invalid(
+    tmp_path: Path,
+    manifest_contents: str | None,
+) -> None:
+    recipes_dir = tmp_path / "recipes"
+    custom_dir = recipes_dir / "custom"
+    marker = tmp_path / "executed.txt"
+    _write_recipe(custom_dir)
+    (custom_dir / "scraper.py").write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                f"Path({str(marker)!r}).write_text('ran', encoding='utf-8')",
+                "from web2api.scraper import BaseScraper, ScrapeResult",
+                "class Scraper(BaseScraper):",
+                "    def supports(self, endpoint): return True",
+                "    async def scrape(self, endpoint, page, params): return ScrapeResult()",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    if manifest_contents is not None:
+        (recipes_dir / ".web2api_recipes.json").write_text(
+            manifest_contents,
+            encoding="utf-8",
+        )
+
+    registry = RecipeRegistry()
+    registry.discover(recipes_dir)
+
+    recipe = registry.get("custom")
+    assert recipe is not None
+    assert recipe.trusted is False
+    assert recipe.scraper is None
+    assert marker.exists() is False
 
 
 def test_discovery_loads_plugin_metadata(tmp_path: Path) -> None:

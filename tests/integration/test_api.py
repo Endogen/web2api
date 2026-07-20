@@ -348,7 +348,13 @@ async def test_endpoint_requires_declared_required_extra_params(
                     "token": {
                         "description": "Required token",
                         "required": True,
-                    }
+                    },
+                    "count": {
+                        "description": "Bounded count",
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                    },
                 },
                 "items": {"container": ".item", "fields": {"title": {"selector": ".title"}}},
                 "pagination": {"type": "page_param", "param": "page"},
@@ -393,7 +399,20 @@ async def test_endpoint_requires_declared_required_extra_params(
             assert success.status_code == 200
             assert calls == 1
 
-    assert captured["extra_params"] == {"token": "secret"}
+            typed = await client.get("/alpha/read?token=secret&count=5")
+            assert typed.status_code == 200
+            assert calls == 2
+
+            invalid = await client.get("/alpha/read?token=secret&count=99")
+            assert invalid.status_code == 400
+            assert calls == 2
+
+            unknown = await client.get("/alpha/read?token=secret&typo=value")
+            assert unknown.status_code == 400
+            assert "unknown query parameter" in unknown.json()["error"]["message"]
+            assert calls == 2
+
+    assert captured["extra_params"] == {"token": "secret", "count": 5}
 
 
 @pytest.mark.asyncio
@@ -483,6 +502,24 @@ async def test_access_token_protects_all_routes_except_public_surfaces(
             )
             assert authorized_recipe.status_code == 200
 
+
+@pytest.mark.asyncio
+async def test_admin_routes_are_disabled_without_a_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WEB2API_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("WEB2API_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("WEB2API_ALLOW_UNAUTHENTICATED_ADMIN", raising=False)
+    app = create_app(recipes_dir=tmp_path / "recipes", pool=FakePool())
+
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.get("/api/recipes/manage")
+
+    assert response.status_code == 403
+    assert "disabled until" in response.json()["detail"]
 
 @pytest.mark.asyncio
 async def test_access_token_allows_configured_public_path_patterns(
@@ -812,7 +849,21 @@ async def test_post_upload_rejects_path_traversal_filenames(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recipes_dir = tmp_path / "recipes"
-    _write_recipe(recipes_dir, "alpha")
+    _write_recipe(
+        recipes_dir,
+        "alpha",
+        endpoints={
+            "read": {
+                "url": "https://example.com/items?page={page}",
+                "accepts_files": True,
+                "items": {
+                    "container": ".item",
+                    "fields": {"title": {"selector": ".title"}},
+                },
+                "pagination": {"type": "page_param", "param": "page"},
+            },
+        },
+    )
 
     captured: dict[str, object] = {}
     escaped_name = f"web2api_escape_{uuid.uuid4().hex}.txt"
@@ -859,6 +910,41 @@ async def test_post_upload_rejects_path_traversal_filenames(
     uploaded_path = Path(str(file_paths[0]))
     assert uploaded_path.name == escaped_name
     assert "/../" not in str(uploaded_path)
+
+
+@pytest.mark.asyncio
+async def test_post_upload_enforces_per_file_size_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recipes_dir = tmp_path / "recipes"
+    _write_recipe(
+        recipes_dir,
+        "alpha",
+        endpoints={
+            "read": {
+                "url": "https://example.com/items?page={page}",
+                "accepts_files": True,
+                "items": {
+                    "container": ".item",
+                    "fields": {"title": {"selector": ".title"}},
+                },
+                "pagination": {"type": "page_param", "param": "page"},
+            },
+        },
+    )
+    monkeypatch.setenv("WEB2API_MAX_UPLOAD_BYTES", "3")
+    app = create_app(recipes_dir=recipes_dir, pool=FakePool())
+
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/alpha/read",
+                files={"files": ("large.txt", b"four", "text/plain")},
+            )
+
+    assert response.status_code == 413
 
 
 @pytest.mark.asyncio

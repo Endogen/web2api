@@ -170,6 +170,27 @@ def test_param_config_defaults() -> None:
     assert param.description is None
     assert param.required is False
     assert param.example is None
+    assert param.type == "string"
+
+
+def test_param_config_supports_typed_constraints() -> None:
+    param = ParamConfig.model_validate({
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "enum": [10, 20, 30],
+        "example": 20,
+    })
+
+    assert param.type == "integer"
+    assert param.minimum == 1
+    assert param.maximum == 50
+    assert param.enum == [10, 20, 30]
+
+
+def test_param_config_rejects_string_constraint_on_numeric_type() -> None:
+    with pytest.raises(ValidationError, match="require type 'string'"):
+        ParamConfig.model_validate({"type": "integer", "pattern": "^[0-9]+$"})
 
 
 def test_endpoint_with_params_parses() -> None:

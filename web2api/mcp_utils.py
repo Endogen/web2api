@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-TOOL_NAME_SEP = "_"
+TOOL_NAME_SEP = "__"
 
 
 def build_tool_name(slug: str, endpoint: str, override: str | None = None) -> str:
     """Build a tool name from recipe slug and endpoint name.
 
     If *override* is given (from endpoint ``tool_name`` config), use that
-    instead of the default ``{slug}_{endpoint}`` convention.
+    instead of the unambiguous default ``{slug}__{endpoint}`` convention.
     """
     if override:
         return override
@@ -74,7 +74,14 @@ def sites_from_registry(registry: Any) -> list[dict[str, Any]]:
                 ep_params[pname] = {
                     "description": pcfg.description,
                     "required": pcfg.required,
+                    "type": pcfg.type,
                     "example": pcfg.example,
+                    "enum": pcfg.enum,
+                    "minimum": pcfg.minimum,
+                    "maximum": pcfg.maximum,
+                    "pattern": pcfg.pattern,
+                    "min_length": pcfg.min_length,
+                    "max_length": pcfg.max_length,
                 }
             endpoints.append({
                 "name": ep_name,
