@@ -21,6 +21,7 @@ from web2api.recipe_manager import (
     disable_recipe,
     discover_recipe_entries,
     enable_recipe,
+    entry_is_trusted,
     find_recipe_entry,
     install_recipe_from_source,
     load_catalog,
@@ -142,6 +143,15 @@ def test_manifest_record_roundtrip(tmp_path: Path) -> None:
     assert load_manifest(recipes_dir)["recipes"] == {}
 
 
+def test_manifest_is_private_and_has_no_leftover_temp_file(tmp_path: Path) -> None:
+    recipes_dir = tmp_path / "recipes"
+    save_manifest(recipes_dir, {"version": 1, "recipes": {}})
+
+    path = recipes_dir / ".web2api_recipes.json"
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert list(recipes_dir.glob("..web2api_recipes.json.*.tmp")) == []
+
+
 def test_copy_recipe_into_recipes_dir_uses_slug_folder(tmp_path: Path) -> None:
     source_recipe = tmp_path / "source-recipe"
     _write_recipe(source_recipe)
@@ -156,6 +166,33 @@ def test_copy_recipe_into_recipes_dir_uses_slug_folder(tmp_path: Path) -> None:
     assert slug == "renamed"
     assert destination == recipes_dir / "renamed"
     assert (destination / "recipe.yaml").exists()
+
+
+def test_copy_recipe_overwrite_keeps_old_recipe_when_staging_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_recipe = tmp_path / "recipes" / "alpha"
+    _write_recipe(old_recipe)
+    (old_recipe / "marker.txt").write_text("old", encoding="utf-8")
+    new_recipe = tmp_path / "new"
+    _write_recipe(new_recipe)
+
+    def _fail_copytree(source: Path, destination: Path) -> None:
+        _ = source, destination
+        raise OSError("copy failed")
+
+    monkeypatch.setattr("web2api.recipe_manager.shutil.copytree", _fail_copytree)
+
+    with pytest.raises(OSError, match="copy failed"):
+        copy_recipe_into_recipes_dir(new_recipe, tmp_path / "recipes", overwrite=True)
+
+    assert (old_recipe / "marker.txt").read_text(encoding="utf-8") == "old"
+
+
+def test_missing_manifest_record_is_untrusted() -> None:
+    assert entry_is_trusted(None) is False
+    assert entry_is_trusted({}) is False
 
 
 def test_discovery_entry_includes_manifest_record(tmp_path: Path) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import keyword
 import re
 from collections.abc import Mapping
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -111,13 +111,60 @@ class PaginationConfig(BaseModel):
 
 
 class ParamConfig(BaseModel):
-    """Declaration of an optional extra query parameter for an endpoint."""
+    """Typed declaration of an extra query parameter for an endpoint."""
 
     model_config = ConfigDict(extra="forbid")
 
     description: str | None = None
     required: bool = False
-    example: str | None = None
+    type: Literal["string", "integer", "number", "boolean"] = "string"
+    example: Any = None
+    enum: list[Any] | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    pattern: str | None = None
+    min_length: int | None = Field(default=None, ge=0)
+    max_length: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_constraints(self) -> ParamConfig:
+        """Ensure constraints match the declared value type."""
+        def _matches_type(value: Any) -> bool:
+            if self.type == "string":
+                return isinstance(value, str)
+            if self.type == "integer":
+                return isinstance(value, int) and not isinstance(value, bool)
+            if self.type == "number":
+                return isinstance(value, (int, float)) and not isinstance(value, bool)
+            return isinstance(value, bool)
+
+        if self.minimum is not None and self.maximum is not None:
+            if self.minimum > self.maximum:
+                raise ValueError("minimum must be less than or equal to maximum")
+        if self.min_length is not None and self.max_length is not None:
+            if self.min_length > self.max_length:
+                raise ValueError("min_length must be less than or equal to max_length")
+        if self.type != "string" and any(
+            value is not None for value in (self.pattern, self.min_length, self.max_length)
+        ):
+            raise ValueError("pattern and length constraints require type 'string'")
+        if self.type not in {"integer", "number"} and any(
+            value is not None for value in (self.minimum, self.maximum)
+        ):
+            raise ValueError("minimum and maximum require a numeric type")
+        if self.pattern is not None:
+            try:
+                re.compile(self.pattern)
+            except re.error as exc:
+                raise ValueError(f"invalid pattern: {exc}") from exc
+        if self.example is not None and not _matches_type(self.example):
+            raise ValueError(f"example must match declared type '{self.type}'")
+        if self.enum is not None:
+            if not self.enum:
+                raise ValueError("enum must contain at least one value")
+            if any(not _matches_type(value) for value in self.enum):
+                raise ValueError(f"enum values must match declared type '{self.type}'")
+        return self
 
 
 class EndpointConfig(BaseModel):
@@ -133,6 +180,7 @@ class EndpointConfig(BaseModel):
     items: ItemsConfig
     pagination: PaginationConfig
     params: dict[str, ParamConfig] = Field(default_factory=dict)
+    accepts_files: bool = False
 
     @model_validator(mode="after")
     def validate_params(self) -> EndpointConfig:

@@ -15,6 +15,7 @@ from playwright.async_api import ElementHandle, Page
 
 from web2api.config import ActionConfig, EndpointConfig, FieldConfig, ItemsConfig, PaginationConfig
 from web2api.logging_utils import log_event
+from web2api.network_security import install_public_network_guard
 from web2api.pool import BrowserPool
 from web2api.registry import Recipe
 from web2api.schemas import (
@@ -203,8 +204,10 @@ async def scrape(
     endpoint: str,
     page: int = 1,
     query: str | None = None,
-    extra_params: dict[str, str] | None = None,
+    extra_params: dict[str, Any] | None = None,
     scrape_timeout: float = 30.0,
+    direct_semaphore: asyncio.Semaphore | None = None,
+    allow_private_network: bool = False,
 ) -> ApiResponse:
     """Run a scrape and return a unified API response."""
     started_at = perf_counter()
@@ -244,9 +247,37 @@ async def scrape(
 
     used_custom_scraper = False
 
+    custom_scraper = recipe.scraper
+    custom_supported = custom_scraper is not None and custom_scraper.supports(endpoint)
+
     async def _do_scrape() -> ScrapeResult:
         nonlocal used_custom_scraper
+        if custom_supported and custom_scraper is not None and not custom_scraper.requires_browser:
+            used_custom_scraper = True
+            if direct_semaphore is None:
+                return await _run_custom_scraper(
+                    recipe=recipe,
+                    endpoint=endpoint,
+                    page=None,
+                    current_page=current_page,
+                    query=query,
+                    extra_params=extra_params,
+                )
+            async with direct_semaphore:
+                return await _run_custom_scraper(
+                    recipe=recipe,
+                    endpoint=endpoint,
+                    page=None,
+                    current_page=current_page,
+                    query=query,
+                    extra_params=extra_params,
+                )
+
         async with pool.page() as browser_page:
+            await install_public_network_guard(
+                browser_page,
+                allow_private_network=allow_private_network,
+            )
             custom_result = await _run_custom_scraper(
                 recipe=recipe,
                 endpoint=endpoint,
@@ -393,10 +424,10 @@ async def _run_custom_scraper(
     *,
     recipe: Recipe,
     endpoint: str,
-    page: Page,
+    page: Page | None,
     current_page: int,
     query: str | None,
-    extra_params: dict[str, str] | None = None,
+    extra_params: dict[str, Any] | None = None,
 ) -> ScrapeResult | None:
     """Invoke a recipe's custom scraper if one is registered.
 

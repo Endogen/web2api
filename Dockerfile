@@ -6,16 +6,18 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl gnupg git \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @steipete/bird \
+    && apt-get install -y --no-install-recommends ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
+RUN pip install --no-cache-dir uv==0.6.11 \
+    && uv sync --frozen --no-dev --no-install-project
+
 COPY web2api/ ./web2api/
 
-RUN pip install --no-cache-dir . \
+ENV PATH="/app/.venv/bin:${PATH}"
+
+RUN uv sync --frozen --no-dev --no-editable \
     && playwright install --with-deps chromium
 
 RUN mkdir -p /data/recipes

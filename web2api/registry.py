@@ -30,6 +30,7 @@ class Recipe:
     scraper: BaseScraper | None
     path: Path
     plugin: PluginConfig | None = None
+    trusted: bool = False
 
 
 class RecipeRegistry:
@@ -184,7 +185,13 @@ class RecipeRegistry:
         trusted = entry_is_trusted(manifest_record)
         scraper = self._load_scraper(recipe_dir, trusted=trusted)
         plugin = self._load_plugin(recipe_dir)
-        return Recipe(config=config, scraper=scraper, path=recipe_dir, plugin=plugin)
+        return Recipe(
+            config=config,
+            scraper=scraper,
+            path=recipe_dir,
+            plugin=plugin,
+            trusted=trusted,
+        )
 
     def _load_plugin(self, recipe_dir: Path) -> PluginConfig | None:
         plugin_config_path = recipe_dir / "plugin.yaml"

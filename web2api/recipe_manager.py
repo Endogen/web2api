@@ -159,13 +159,35 @@ def load_manifest(recipes_dir: Path) -> dict[str, Any]:
 
 
 def save_manifest(recipes_dir: Path, manifest: dict[str, Any]) -> None:
-    """Write recipe install-state manifest."""
+    """Atomically write recipe install-state manifest with private permissions."""
     recipes_dir.mkdir(parents=True, exist_ok=True)
     path = manifest_path(recipes_dir)
-    path.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    payload = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=recipes_dir,
+            prefix=f".{MANIFEST_FILENAME}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            os.chmod(temp_path, 0o600)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        temp_path = None
+        directory_fd = os.open(recipes_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 def get_manifest_record(manifest: dict[str, Any], slug: str) -> dict[str, Any] | None:
@@ -186,10 +208,10 @@ def source_type_from_manifest_record(record: dict[str, Any]) -> SourceType | Non
 
 
 def entry_is_trusted(entry_record: dict[str, Any] | None) -> bool:
-    """Return trust flag from manifest record; defaults to trusted."""
+    """Return an explicit trust flag; missing or malformed records fail closed."""
     if isinstance(entry_record, dict) and isinstance(entry_record.get("trusted"), bool):
         return bool(entry_record["trusted"])
-    return True
+    return False
 
 
 def recipe_origin(source_type: str | None) -> str:
@@ -1173,20 +1195,33 @@ def copy_recipe_into_recipes_dir(
     *,
     overwrite: bool = False,
 ) -> tuple[str, Path]:
-    """Copy recipe directory into recipes directory using slug as folder name."""
+    """Atomically copy a recipe into place using its slug as the folder name."""
     slug = load_source_recipe_slug(source_recipe_dir)
     recipes_dir.mkdir(parents=True, exist_ok=True)
     destination = recipes_dir / slug
 
-    if destination.exists():
-        if not overwrite:
-            raise ValueError(f"destination recipe already exists: {destination}")
-        shutil.rmtree(destination)
+    if destination.exists() and not overwrite:
+        raise ValueError(f"destination recipe already exists: {destination}")
 
-    shutil.copytree(source_recipe_dir, destination)
-    disabled_marker = destination / DISABLED_MARKER
-    if disabled_marker.exists():
-        disabled_marker.unlink()
+    staging_root = Path(tempfile.mkdtemp(prefix=".web2api-install-", dir=recipes_dir))
+    staged_recipe = staging_root / slug
+    backup = staging_root / "previous"
+    try:
+        shutil.copytree(source_recipe_dir, staged_recipe)
+        (staged_recipe / DISABLED_MARKER).unlink(missing_ok=True)
+
+        if destination.exists():
+            os.replace(destination, backup)
+        try:
+            os.replace(staged_recipe, destination)
+        except Exception:
+            if backup.exists() and not destination.exists():
+                os.replace(backup, destination)
+            raise
+        if backup.exists():
+            shutil.rmtree(backup)
+    finally:
+        shutil.rmtree(staging_root, ignore_errors=True)
     return slug, destination
 
 

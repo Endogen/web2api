@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -19,7 +21,7 @@ from fastapi.templating import Jinja2Templates
 from web2api import __version__
 from web2api.auth import load_auth_config, public_auth_payload, request_is_authorized
 from web2api.cache import CacheKey, ResponseCache
-from web2api.config import is_valid_param_name
+from web2api.config import ParamConfig, is_valid_param_name
 from web2api.engine import scrape
 from web2api.logging_utils import (
     REQUEST_ID_HEADER,
@@ -52,6 +54,8 @@ from web2api.schemas import (
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 logger = logging.getLogger(__name__)
 _MAX_EXTRA_PARAM_VALUE_LENGTH = 512
+_MAX_QUERY_LENGTH = 16_384
+_UPLOAD_CHUNK_SIZE = 64 * 1024
 APP_VERSION = __version__
 
 
@@ -97,12 +101,9 @@ def _site_payload(recipe: Recipe) -> dict[str, Any]:
             "description": ep_config.description,
             "requires_query": ep_config.requires_query,
             "link": f"/{config.slug}/{name}",
+            "accepts_files": ep_config.accepts_files,
             "params": {
-                param_name: {
-                    "description": param.description,
-                    "required": param.required,
-                    "example": param.example,
-                }
+                param_name: param.model_dump(exclude_none=True)
                 for param_name, param in ep_config.params.items()
             },
         })
@@ -176,19 +177,76 @@ def _validate_declared_endpoint_params(
     *,
     recipe: Recipe,
     endpoint_name: str,
-    extra_params: Mapping[str, Any] | None,
-) -> str | None:
+    extra_params: Mapping[str, str] | None,
+) -> tuple[dict[str, Any] | None, str | None]:
     endpoint_config = recipe.config.endpoints[endpoint_name]
+    raw_params = dict(extra_params or {})
+    unknown = sorted(set(raw_params) - set(endpoint_config.params))
+    if unknown:
+        return None, f"unknown query parameter(s): {', '.join(unknown)}"
+
+    validated: dict[str, Any] = {}
     for param_name, param in endpoint_config.params.items():
-        if not param.required:
-            continue
-        value = extra_params.get(param_name) if extra_params is not None else None
+        value = raw_params.get(param_name)
         if value is None or value == "":
-            return (
-                f"missing required query parameter '{param_name}' "
-                f"for endpoint '{endpoint_name}'"
+            if param.required:
+                return None, (
+                    f"missing required query parameter '{param_name}' "
+                    f"for endpoint '{endpoint_name}'"
+                )
+            continue
+        try:
+            validated[param_name] = _coerce_param_value(param_name, value, param)
+        except ValueError as exc:
+            return None, str(exc)
+    return validated or None, None
+
+
+def _coerce_param_value(name: str, raw: str, config: ParamConfig) -> Any:
+    """Coerce and validate one declared endpoint parameter."""
+    try:
+        if config.type == "integer":
+            value: Any = int(raw)
+        elif config.type == "number":
+            value = float(raw)
+        elif config.type == "boolean":
+            normalized = raw.strip().lower()
+            if normalized not in {"true", "false", "1", "0", "yes", "no", "on", "off"}:
+                raise ValueError
+            value = normalized in {"true", "1", "yes", "on"}
+        else:
+            value = raw
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"invalid query parameter '{name}': expected {config.type}"
+        ) from None
+
+    if config.enum is not None and value not in config.enum:
+        allowed = ", ".join(repr(item) for item in config.enum)
+        raise ValueError(f"invalid query parameter '{name}': expected one of {allowed}")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if config.minimum is not None and value < config.minimum:
+            raise ValueError(
+                f"invalid query parameter '{name}': must be >= {config.minimum}"
             )
-    return None
+        if config.maximum is not None and value > config.maximum:
+            raise ValueError(
+                f"invalid query parameter '{name}': must be <= {config.maximum}"
+            )
+    if isinstance(value, str):
+        if config.min_length is not None and len(value) < config.min_length:
+            raise ValueError(
+                f"invalid query parameter '{name}': length must be >= {config.min_length}"
+            )
+        if config.max_length is not None and len(value) > config.max_length:
+            raise ValueError(
+                f"invalid query parameter '{name}': length must be <= {config.max_length}"
+            )
+        if config.pattern is not None and re.fullmatch(config.pattern, value) is None:
+            raise ValueError(
+                f"invalid query parameter '{name}': does not match required pattern"
+            )
+    return value
 
 
 def _sanitize_upload_filename(raw_filename: str, *, fallback_index: int) -> str:
@@ -197,7 +255,10 @@ def _sanitize_upload_filename(raw_filename: str, *, fallback_index: int) -> str:
     candidate = Path(normalized).name.strip()
     if not candidate or candidate in {".", ".."}:
         return f"upload_{fallback_index}"
-    return candidate
+    sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", candidate)[:255]
+    if not sanitized or sanitized in {".", ".."}:
+        return f"upload_{fallback_index}"
+    return sanitized
 
 
 def _cache_key_for_request(
@@ -206,11 +267,17 @@ def _cache_key_for_request(
     endpoint: str,
     page: int,
     query: str | None,
-    extra_params: dict[str, str] | None,
+    extra_params: dict[str, Any] | None,
 ) -> CacheKey:
     if extra_params:
         # Exclude non-hashable values (e.g. file_paths list) from cache key
-        params = tuple(sorted((k, v) for k, v in extra_params.items() if isinstance(v, str)))
+        params = tuple(
+            sorted(
+                (k, str(v))
+                for k, v in extra_params.items()
+                if isinstance(v, (str, int, float, bool))
+            )
+        )
     else:
         params = ()
     return (slug, endpoint, page, query, params)
@@ -257,11 +324,7 @@ async def execute_recipe_endpoint(
     file_paths: list[str] | None = None,
 ) -> ApiResponse:
     """Execute a recipe endpoint request and return the normalized response."""
-    extra_params, extra_error = _collect_extra_params(query_params)
-    if file_paths:
-        if extra_params is None:
-            extra_params = {}
-        extra_params["file_paths"] = file_paths  # type: ignore[assignment]
+    raw_extra_params, extra_error = _collect_extra_params(query_params)
     if extra_error is not None:
         return _build_error_response(
             recipe=recipe,
@@ -271,33 +334,52 @@ async def execute_recipe_endpoint(
             code="INVALID_PARAMS",
             message=extra_error,
         )
-    required_param_error = _validate_declared_endpoint_params(
+    extra_params, param_error = _validate_declared_endpoint_params(
         recipe=recipe,
         endpoint_name=endpoint_name,
-        extra_params=extra_params,
+        extra_params=raw_extra_params,
     )
-    if required_param_error is not None:
+    if param_error is not None:
         return _build_error_response(
             recipe=recipe,
             endpoint=endpoint_name,
             current_page=page,
             query=q,
             code="INVALID_PARAMS",
-            message=required_param_error,
+            message=param_error,
         )
+    if file_paths:
+        if not recipe.config.endpoints[endpoint_name].accepts_files:
+            return _build_error_response(
+                recipe=recipe,
+                endpoint=endpoint_name,
+                current_page=page,
+                query=q,
+                code="INVALID_PARAMS",
+                message=f"endpoint '{endpoint_name}' does not accept file uploads",
+            )
+        if extra_params is None:
+            extra_params = {}
+        extra_params["file_paths"] = file_paths
 
     scrape_func = getattr(app.state, "scrape_func", scrape)
 
     async def _run_scrape() -> ApiResponse:
-        return await scrape_func(
-            pool=app.state.pool,
-            recipe=recipe,
-            endpoint=endpoint_name,
-            page=page,
-            query=q,
-            extra_params=extra_params,
-            scrape_timeout=app.state.scrape_timeout,
-        )
+        kwargs: dict[str, Any] = {
+            "pool": app.state.pool,
+            "recipe": recipe,
+            "endpoint": endpoint_name,
+            "page": page,
+            "query": q,
+            "extra_params": extra_params,
+            "scrape_timeout": app.state.scrape_timeout,
+        }
+        parameters = inspect.signature(scrape_func).parameters
+        if "direct_semaphore" in parameters:
+            kwargs["direct_semaphore"] = app.state.direct_scrape_semaphore
+        if "allow_private_network" in parameters:
+            kwargs["allow_private_network"] = app.state.allow_private_network
+        return await scrape_func(**kwargs)
 
     response_cache: ResponseCache | None = getattr(app.state, "response_cache", None)
     cache_key: CacheKey | None = None
@@ -346,6 +428,12 @@ def create_app(
         if scrape_timeout is not None
         else float(os.environ.get("SCRAPE_TIMEOUT", "30"))
     )
+    max_direct_scrapes = int(os.environ.get("DIRECT_MAX_CONCURRENCY", "20"))
+    allow_private_network = _env_bool("WEB2API_ALLOW_PRIVATE_NETWORK", default=False)
+    max_upload_files = int(os.environ.get("WEB2API_MAX_UPLOAD_FILES", "4"))
+    max_upload_bytes = int(
+        os.environ.get("WEB2API_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024))
+    )
     enforce_plugin_compatibility = _env_bool(
         "PLUGIN_ENFORCE_COMPATIBILITY",
         default=False,
@@ -381,6 +469,10 @@ def create_app(
         app.state.recipes_dir = effective_recipes_dir
         app.state.enforce_plugin_compatibility = enforce_plugin_compatibility
         app.state.scrape_timeout = effective_scrape_timeout
+        app.state.direct_scrape_semaphore = asyncio.Semaphore(max_direct_scrapes)
+        app.state.allow_private_network = allow_private_network
+        app.state.max_upload_files = max_upload_files
+        app.state.max_upload_bytes = max_upload_bytes
         app.state.response_cache = active_response_cache
         app.state.catalog_source = catalog_source_value
         app.state.catalog_ref = catalog_ref_value
@@ -418,9 +510,31 @@ def create_app(
         )
         auth_state = getattr(request.app.state, "auth_config", auth_config)
         try:
+            if auth_state.admin_is_disabled(request.url.path):
+                elapsed_ms = int((perf_counter() - started_at) * 1000)
+                response = JSONResponse(
+                    status_code=403,
+                    content={
+                        "detail": (
+                            "Recipe administration is disabled until "
+                            "WEB2API_ADMIN_TOKEN or WEB2API_ACCESS_TOKEN is configured."
+                        ),
+                    },
+                )
+                response.headers[REQUEST_ID_HEADER] = request_id
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "request.admin_disabled",
+                    method=request.method,
+                    path=request.url.path,
+                    response_time_ms=elapsed_ms,
+                )
+                return response
             if auth_state.requires_auth(request.url.path) and not request_is_authorized(
                 request.headers,
                 auth_state,
+                path=request.url.path,
             ):
                 elapsed_ms = int((perf_counter() - started_at) * 1000)
                 response = JSONResponse(
@@ -530,7 +644,7 @@ def create_app(
         slug: str,
         endpoint: str,
         page: int = Query(default=1, ge=1),
-        q: str | None = Query(default=None),
+        q: str | None = Query(default=None, max_length=_MAX_QUERY_LENGTH),
     ) -> JSONResponse:
         """Serve recipe endpoints using the live in-memory registry."""
         registry_state: RecipeRegistry = request.app.state.registry
@@ -551,7 +665,7 @@ def create_app(
         slug: str,
         endpoint: str,
         page: int = Query(default=1, ge=1),
-        q: str | None = Query(default=None),
+        q: str | None = Query(default=None, max_length=_MAX_QUERY_LENGTH),
         files: list[UploadFile] = File(default=[]),
     ) -> JSONResponse:
         """Serve recipe endpoints with file upload support (POST multipart)."""
@@ -566,6 +680,20 @@ def create_app(
         temp_dir = None
         try:
             if files:
+                endpoint_config = recipe.config.endpoints[endpoint]
+                if not endpoint_config.accepts_files:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"endpoint '{endpoint}' does not accept file uploads",
+                    )
+                if len(files) > request.app.state.max_upload_files:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            "too many files; maximum is "
+                            f"{request.app.state.max_upload_files}"
+                        ),
+                    )
                 temp_dir = tempfile.mkdtemp(prefix="web2api_upload_")
                 temp_dir_path = Path(temp_dir).resolve()
                 for index, upload in enumerate(files):
@@ -577,9 +705,19 @@ def create_app(
                         dest = (temp_dir_path / safe_name).resolve()
                         if temp_dir_path not in dest.parents and dest != temp_dir_path:
                             raise HTTPException(status_code=400, detail="invalid upload filename")
-                        content = await upload.read()
                         with dest.open("wb") as f:
-                            f.write(content)
+                            total_bytes = 0
+                            while chunk := await upload.read(_UPLOAD_CHUNK_SIZE):
+                                total_bytes += len(chunk)
+                                if total_bytes > request.app.state.max_upload_bytes:
+                                    raise HTTPException(
+                                        status_code=413,
+                                        detail=(
+                                            f"file '{safe_name}' exceeds "
+                                            f"{request.app.state.max_upload_bytes} bytes"
+                                        ),
+                                    )
+                                f.write(chunk)
                         saved_paths.append(str(dest))
 
             # Inject file_paths into the request query string so

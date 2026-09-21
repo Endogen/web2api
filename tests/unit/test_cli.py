@@ -26,6 +26,7 @@ def test_recipes_install_defaults_to_no_apt(
         has_recipe=True,
         plugin=plugin,
         error=None,
+        manifest_record={"trusted": True},
     )
 
     captured: dict[str, bool] = {}
