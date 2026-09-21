@@ -199,8 +199,10 @@ async def test_api_routes_and_index(
         query: str | None = None,
         extra_params: dict[str, str] | None = None,
         scrape_timeout: float = 30.0,
+        direct_semaphore: asyncio.Semaphore | None = None,
+        allow_private_network: bool = False,
     ) -> ApiResponse:
-        _ = pool, extra_params, scrape_timeout
+        _ = pool, extra_params, scrape_timeout, direct_semaphore, allow_private_network
         ep_config = recipe.config.endpoints.get(endpoint)
         if ep_config is None:
             return _error_response(
@@ -374,8 +376,10 @@ async def test_endpoint_requires_declared_required_extra_params(
         query: str | None = None,
         extra_params: dict[str, str] | None = None,
         scrape_timeout: float = 30.0,
+        direct_semaphore: asyncio.Semaphore | None = None,
+        allow_private_network: bool = False,
     ) -> ApiResponse:
-        _ = pool, recipe, endpoint, query, scrape_timeout
+        _ = pool, recipe, endpoint, query, scrape_timeout, direct_semaphore, allow_private_network
         nonlocal calls
         calls += 1
         captured["extra_params"] = dict(extra_params or {})
@@ -432,8 +436,13 @@ async def test_access_token_protects_all_routes_except_public_surfaces(
         query: str | None = None,
         extra_params: dict[str, str] | None = None,
         scrape_timeout: float = 30.0,
+        direct_semaphore: asyncio.Semaphore | None = None,
+        allow_private_network: bool = False,
     ) -> ApiResponse:
-        _ = pool, recipe, endpoint, query, extra_params, scrape_timeout
+        _ = (
+            pool, recipe, endpoint, query, extra_params, scrape_timeout, direct_semaphore,
+            allow_private_network,
+        )
         return _success_response(slug="alpha", endpoint="read", page=page)
 
     monkeypatch.setattr("web2api.main.scrape", fake_scrape)
@@ -539,8 +548,13 @@ async def test_access_token_allows_configured_public_path_patterns(
         query: str | None = None,
         extra_params: dict[str, str] | None = None,
         scrape_timeout: float = 30.0,
+        direct_semaphore: asyncio.Semaphore | None = None,
+        allow_private_network: bool = False,
     ) -> ApiResponse:
-        _ = pool, endpoint, query, extra_params, scrape_timeout
+        _ = (
+            pool, endpoint, query, extra_params, scrape_timeout, direct_semaphore,
+            allow_private_network,
+        )
         return _success_response(slug=recipe.config.slug, endpoint="read", page=page)
 
     monkeypatch.setattr("web2api.main.scrape", fake_scrape)
@@ -598,8 +612,13 @@ async def test_response_cache_serves_fresh_and_stale_results(
         query: str | None = None,
         extra_params: dict[str, str] | None = None,
         scrape_timeout: float = 30.0,
+        direct_semaphore: asyncio.Semaphore | None = None,
+        allow_private_network: bool = False,
     ) -> ApiResponse:
-        _ = pool, recipe, endpoint, query, extra_params, scrape_timeout
+        _ = (
+            pool, recipe, endpoint, query, extra_params, scrape_timeout, direct_semaphore,
+            allow_private_network,
+        )
         nonlocal call_count
         call_count += 1
         await asyncio.sleep(0.02)
@@ -814,8 +833,10 @@ async def test_mcp_bridge_preserves_special_characters_in_params(
         query: str | None = None,
         extra_params: dict[str, str] | None = None,
         scrape_timeout: float = 30.0,
+        direct_semaphore: asyncio.Semaphore | None = None,
+        allow_private_network: bool = False,
     ) -> ApiResponse:
-        _ = pool, recipe, endpoint, page, scrape_timeout
+        _ = pool, recipe, endpoint, page, scrape_timeout, direct_semaphore, allow_private_network
         captured["query"] = query
         captured["extra_params"] = dict(extra_params or {})
         return _success_response(slug="alpha", endpoint="search", page=1, query=query)
@@ -880,8 +901,13 @@ async def test_post_upload_rejects_path_traversal_filenames(
         query: str | None = None,
         extra_params: dict[str, str] | None = None,
         scrape_timeout: float = 30.0,
+        direct_semaphore: asyncio.Semaphore | None = None,
+        allow_private_network: bool = False,
     ) -> ApiResponse:
-        _ = pool, recipe, endpoint, page, query, scrape_timeout
+        _ = (
+            pool, recipe, endpoint, page, query, scrape_timeout, direct_semaphore,
+            allow_private_network,
+        )
         captured["extra_params"] = dict(extra_params or {})
         return _success_response(slug="alpha", endpoint="read", page=1)
 

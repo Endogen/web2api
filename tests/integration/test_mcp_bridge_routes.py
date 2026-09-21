@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -131,8 +132,10 @@ async def test_mcp_call_tool_honors_page_param(
         query: str | None = None,
         extra_params: dict[str, str] | None = None,
         scrape_timeout: float = 30.0,
+        direct_semaphore: asyncio.Semaphore | None = None,
+        allow_private_network: bool = False,
     ) -> ApiResponse:
-        _ = pool, query, extra_params, scrape_timeout
+        _ = pool, query, extra_params, scrape_timeout, direct_semaphore, allow_private_network
         seen_pages.append(page)
         return _success_response(slug=recipe.config.slug, endpoint=endpoint, page=page)
 
@@ -165,8 +168,10 @@ async def test_mcp_call_tool_error_uses_mapped_status_code(
         query: str | None = None,
         extra_params: dict[str, str] | None = None,
         scrape_timeout: float = 30.0,
+        direct_semaphore: asyncio.Semaphore | None = None,
+        allow_private_network: bool = False,
     ) -> ApiResponse:
-        _ = pool, query, extra_params, scrape_timeout
+        _ = pool, query, extra_params, scrape_timeout, direct_semaphore, allow_private_network
         return _error_response(
             slug=recipe.config.slug,
             endpoint=endpoint,
@@ -205,8 +210,10 @@ async def test_mcp_call_tool_filtered_enforces_exclude(
         query: str | None = None,
         extra_params: dict[str, str] | None = None,
         scrape_timeout: float = 30.0,
+        direct_semaphore: asyncio.Semaphore | None = None,
+        allow_private_network: bool = False,
     ) -> ApiResponse:
-        _ = pool, query, extra_params, scrape_timeout
+        _ = pool, query, extra_params, scrape_timeout, direct_semaphore, allow_private_network
         nonlocal called
         called = True
         return _success_response(slug=recipe.config.slug, endpoint=endpoint, page=page)
@@ -245,8 +252,10 @@ async def test_mcp_call_tool_filtered_enforces_only(
         query: str | None = None,
         extra_params: dict[str, str] | None = None,
         scrape_timeout: float = 30.0,
+        direct_semaphore: asyncio.Semaphore | None = None,
+        allow_private_network: bool = False,
     ) -> ApiResponse:
-        _ = pool, query, extra_params, scrape_timeout
+        _ = pool, query, extra_params, scrape_timeout, direct_semaphore, allow_private_network
         seen_pages.append(page)
         return _success_response(slug=recipe.config.slug, endpoint=endpoint, page=page)
 

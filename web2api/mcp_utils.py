@@ -18,14 +18,6 @@ def build_tool_name(slug: str, endpoint: str, override: str | None = None) -> st
     return f"{slug}{TOOL_NAME_SEP}{endpoint}"
 
 
-def parse_tool_name(name: str) -> tuple[str, str] | None:
-    """Parse a tool name into (slug, endpoint). Returns None if invalid."""
-    parts = name.split(TOOL_NAME_SEP, 1)
-    if len(parts) != 2:
-        return None
-    return parts[0], parts[1]
-
-
 def format_tool_result(data: dict[str, Any]) -> str:
     """Format a web2api JSON response into readable text for MCP consumers."""
     error = data.get("error")

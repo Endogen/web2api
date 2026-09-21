@@ -30,7 +30,6 @@ class Recipe:
     scraper: BaseScraper | None
     path: Path
     plugin: PluginConfig | None = None
-    trusted: bool = False
 
 
 class RecipeRegistry:
@@ -190,7 +189,6 @@ class RecipeRegistry:
             scraper=scraper,
             path=recipe_dir,
             plugin=plugin,
-            trusted=trusted,
         )
 
     def _load_plugin(self, recipe_dir: Path) -> PluginConfig | None:

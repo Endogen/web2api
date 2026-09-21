@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 import os
 import re
@@ -354,21 +353,17 @@ async def execute_recipe_endpoint(
     scrape_func = getattr(app.state, "scrape_func", scrape)
 
     async def _run_scrape() -> ApiResponse:
-        kwargs: dict[str, Any] = {
-            "pool": app.state.pool,
-            "recipe": recipe,
-            "endpoint": endpoint_name,
-            "page": page,
-            "query": q,
-            "extra_params": extra_params,
-            "scrape_timeout": app.state.scrape_timeout,
-        }
-        parameters = inspect.signature(scrape_func).parameters
-        if "direct_semaphore" in parameters:
-            kwargs["direct_semaphore"] = app.state.direct_scrape_semaphore
-        if "allow_private_network" in parameters:
-            kwargs["allow_private_network"] = app.state.allow_private_network
-        return await scrape_func(**kwargs)
+        return await scrape_func(
+            pool=app.state.pool,
+            recipe=recipe,
+            endpoint=endpoint_name,
+            page=page,
+            query=q,
+            extra_params=extra_params,
+            scrape_timeout=app.state.scrape_timeout,
+            direct_semaphore=app.state.direct_scrape_semaphore,
+            allow_private_network=app.state.allow_private_network,
+        )
 
     response_cache: ResponseCache | None = getattr(app.state, "response_cache", None)
     cache_key: CacheKey | None = None
@@ -404,7 +399,8 @@ def create_app(
     response_cache: ResponseCache | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application."""
-    logging.getLogger("web2api").setLevel(logging.INFO)
+    log_level = os.environ.get("LOG_LEVEL", "info").strip().upper()
+    logging.getLogger("web2api").setLevel(getattr(logging, log_level, logging.INFO))
     browser_pool = pool or BrowserPool(
         max_contexts=int(os.environ.get("POOL_MAX_CONTEXTS", "5")),
         context_ttl=int(os.environ.get("POOL_CONTEXT_TTL", "50")),

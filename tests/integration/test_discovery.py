@@ -176,7 +176,6 @@ def test_discovery_fails_closed_when_manifest_is_missing_or_invalid(
 
     recipe = registry.get("custom")
     assert recipe is not None
-    assert recipe.trusted is False
     assert recipe.scraper is None
     assert marker.exists() is False
 
