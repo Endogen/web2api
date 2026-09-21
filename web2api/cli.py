@@ -17,6 +17,7 @@ from web2api.recipe_manager import (
     build_dockerfile_snippet,
     build_entry_payload,
     build_install_commands,
+    catalog_entry_is_trusted,
     default_catalog_path,
     default_catalog_ref,
     default_catalog_source,
@@ -783,7 +784,7 @@ def recipes_catalog_add(
         typer.echo(f"Catalog entry '{name}' was not found in {source_value}.", err=True)
         raise typer.Exit(code=1)
 
-    trusted_value = trusted or bool(spec.trusted)
+    trusted_value = trusted or catalog_entry_is_trusted(spec.trusted)
 
     target_dir = _recipes_dir_option(recipes_dir)
 

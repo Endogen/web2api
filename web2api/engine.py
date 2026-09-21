@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from collections.abc import Callable
@@ -27,7 +28,7 @@ from web2api.schemas import (
     PaginationResponse,
     SiteInfo,
 )
-from web2api.scraper import ScrapeResult
+from web2api.scraper import InvalidParamsError, ScrapeResult
 
 logger = logging.getLogger(__name__)
 TransformHandler = Callable[[str, str], Any]
@@ -191,6 +192,12 @@ async def detect_pagination(
     """Detect pagination values after extraction."""
     has_prev = current_page > 1
     if pagination.type in {"page_param", "offset_param"}:
+        # For param-based pagination a next-page selector is optional. When
+        # provided it gives an accurate ``has_next``; otherwise we fall back
+        # to the only available signal: the page produced at least one item.
+        if pagination.selector:
+            next_link = await page.query_selector(pagination.selector)
+            return next_link is not None, has_prev, None, None
         return item_count > 0, has_prev, None, None
 
     next_link = await page.query_selector(pagination.selector)
@@ -325,6 +332,16 @@ async def scrape(
             code="SCRAPE_TIMEOUT",
             message=f"scrape exceeded {scrape_timeout}s timeout",
         )
+    except InvalidParamsError as exc:
+        return _error_response(
+            recipe=recipe,
+            endpoint=endpoint,
+            query=query,
+            current_page=current_page,
+            started_at=started_at,
+            code="INVALID_PARAMS",
+            message=str(exc),
+        )
     except Exception as exc:  # noqa: BLE001
         return _error_response(
             recipe=recipe,
@@ -452,7 +469,11 @@ async def _run_custom_scraper(
 def _normalize_items(raw_items: list[dict[str, Any]]) -> list[ItemResponse]:
     items: list[ItemResponse] = []
     for raw_item in raw_items:
-        fields = {key: value for key, value in raw_item.items() if key not in {"title", "url"}}
+        fields: dict[str, Any] = {
+            key: _normalize_field_value(value)
+            for key, value in raw_item.items()
+            if key not in {"title", "url"}
+        }
         title = raw_item.get("title")
         url = raw_item.get("url")
         items.append(
@@ -463,6 +484,18 @@ def _normalize_items(raw_items: list[dict[str, Any]]) -> list[ItemResponse]:
             )
         )
     return items
+
+
+def _normalize_field_value(value: Any) -> Any:
+    """Coerce a scraped field value into the scalar-only ``FieldValue`` type.
+
+    Custom scrapers may return nested lists/dicts; ``ItemResponse.fields``
+    only allows scalars, so serialize anything non-scalar to a JSON string
+    instead of failing response validation.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return json.dumps(value, ensure_ascii=False, default=str)
 
 
 def _to_iso_date(value: str) -> str | None:

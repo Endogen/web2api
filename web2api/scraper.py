@@ -21,6 +21,43 @@ class ScrapeResult:
     total_items: int | None = None
 
 
+class InvalidParamsError(ValueError):
+    """Raised by a scraper when request parameters are malformed.
+
+    The scraping engine maps this to an ``INVALID_PARAMS`` error response
+    instead of the generic ``SCRAPE_FAILED``.
+    """
+
+
+def coerce_int(value: Any, *, name: str, default: int) -> int:
+    """Coerce a user-supplied parameter to ``int``, raising on bad input."""
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise InvalidParamsError(
+            f"invalid {name} parameter: {value!r} (expected an integer)"
+        ) from exc
+
+
+def coerce_float(
+    value: Any,
+    *,
+    name: str,
+    default: float | None = None,
+) -> float | None:
+    """Coerce a user-supplied parameter to ``float``, raising on bad input."""
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise InvalidParamsError(
+            f"invalid {name} parameter: {value!r} (expected a number)"
+        ) from exc
+
+
 class BaseScraper(ABC):
     """Base class for optional recipe-specific scraper implementations.
 

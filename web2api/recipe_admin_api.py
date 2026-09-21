@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from web2api.recipe_manager import (
     build_entry_payload,
+    catalog_entry_is_trusted,
     check_recipe_updates,
     disable_recipe,
     discover_recipe_entries,
@@ -52,6 +53,12 @@ async def _reload_registry_and_tools(app: FastAPI, *, app_version: str) -> None:
         enforce_plugin_compatibility=app.state.enforce_plugin_compatibility,
     )
     app.state.registry = registry
+
+    # Drop cached responses so updated/installed recipes are served fresh.
+    response_cache = getattr(app.state, "response_cache", None)
+    clear_cache = getattr(response_cache, "clear", None)
+    if clear_cache is not None:
+        await clear_cache()
 
     # Rebuild MCP tools so connected clients see the change
     try:
@@ -172,7 +179,7 @@ def register_recipe_admin_routes(app: FastAPI, *, app_version: str) -> None:
                     recipes_dir=request.app.state.recipes_dir,
                     source_ref=spec.source_ref,
                     source_subdir=spec.source_subdir,
-                    trusted=bool(spec.trusted),
+                    trusted=catalog_entry_is_trusted(spec.trusted),
                     overwrite=False,
                     record_source_type="catalog",
                 )
