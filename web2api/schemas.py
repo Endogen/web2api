@@ -83,3 +83,17 @@ class ApiResponse(BaseModel):
     pagination: PaginationResponse
     metadata: MetadataResponse
     error: ErrorResponse | None = None
+
+
+def status_code_for_error(error: ErrorResponse | None) -> int:
+    """Map unified API error payloads to HTTP status codes."""
+    if error is None:
+        return 200
+    return {
+        "SITE_NOT_FOUND": 404,
+        "CAPABILITY_NOT_SUPPORTED": 400,
+        "INVALID_PARAMS": 400,
+        "SCRAPE_FAILED": 502,
+        "SCRAPE_TIMEOUT": 504,
+        "INTERNAL_ERROR": 500,
+    }.get(error.code, 500)

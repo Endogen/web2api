@@ -127,6 +127,7 @@ class _ToolRegistry:
         param_docs: list[str] = []
         if requires_q:
             param_docs.append("q: The search query or prompt (required)")
+        param_docs.append("page: 1-based page number (optional, default 1)")
         for pname, pcfg in extra_params.items():
             pdesc = pcfg.get("description", "")
             suffix = " (required)" if pcfg.get("required") else " (optional)"

@@ -16,8 +16,9 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from web2api.mcp_utils import build_tool_name, parse_tool_name
+from web2api.mcp_utils import build_tool_name
 from web2api.registry import RecipeRegistry
+from web2api.schemas import status_code_for_error
 
 logger = logging.getLogger(__name__)
 
@@ -25,25 +26,19 @@ logger = logging.getLogger(__name__)
 def _resolve_tool(registry: RecipeRegistry, tool_name: str) -> tuple[str | None, str | None]:
     """Resolve a tool name to (slug, endpoint_name).
 
-    Checks custom ``tool_name`` overrides first, then falls back to the
-    standard ``{slug}__{endpoint}`` naming convention. Legacy single-underscore
-    names are still accepted for existing clients.
+    Matches by recomputing each endpoint's tool name via ``build_tool_name``,
+    which handles both custom ``tool_name`` overrides and the standard
+    ``{slug}__{endpoint}`` convention — robust to slugs/endpoints that
+    themselves contain underscores. Legacy single-underscore names remain
+    accepted for existing clients.
     """
-    # Check custom tool_name overrides
     for recipe in registry.list_all():
         slug = recipe.config.slug
         for ep_name, ep_cfg in recipe.config.endpoints.items():
-            if ep_cfg.tool_name and ep_cfg.tool_name == tool_name:
+            if build_tool_name(slug, ep_name, ep_cfg.tool_name) == tool_name:
                 return slug, ep_name
 
-    # Fall back to standard naming
-    parsed = parse_tool_name(tool_name)
-    if parsed:
-        slug, ep_name = parsed
-        recipe = registry.get(slug)
-        if recipe and ep_name in recipe.config.endpoints:
-            return slug, ep_name
-
+    # Legacy single-underscore names for backward compatibility.
     for recipe in registry.list_all():
         for ep_name in recipe.config.endpoints:
             if tool_name == f"{recipe.config.slug}_{ep_name}":
@@ -188,7 +183,16 @@ def register_mcp_routes(app: FastAPI) -> None:
         filter_value: str,
         tool_name: str,
     ) -> JSONResponse:
-        """Call a tool via the filtered MCP path (routing is the same)."""
+        """Call a tool via the filtered MCP path, enforcing the filter."""
+        registry: RecipeRegistry = request.app.state.registry
+        slugs = {s.strip() for s in filter_value.split(",") if s.strip()}
+        tool_slug = _tool_slug(registry, tool_name)
+
+        if filter_type == "only" and (tool_slug is None or tool_slug not in slugs):
+            raise HTTPException(status_code=404, detail=f"Tool not found: {tool_name}")
+        if filter_type == "exclude" and tool_slug is not None and tool_slug in slugs:
+            raise HTTPException(status_code=404, detail=f"Tool not found: {tool_name}")
+
         return await mcp_call_tool(request, tool_name)
 
     @app.post("/mcp/tools/{tool_name}")
@@ -250,7 +254,10 @@ def register_mcp_routes(app: FastAPI) -> None:
             error = response_data.get("error")
 
             if error:
-                return JSONResponse({"result": f"Error: {error.get('message', 'unknown error')}"})
+                return JSONResponse(
+                    {"result": f"Error: {error.get('message', 'unknown error')}"},
+                    status_code=status_code_for_error(response.error),
+                )
 
             if len(items) == 1:
                 fields = items[0].get("fields", {})

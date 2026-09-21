@@ -214,6 +214,16 @@ def entry_is_trusted(entry_record: dict[str, Any] | None) -> bool:
     return False
 
 
+def catalog_entry_is_trusted(trusted: bool | None) -> bool:
+    """Resolve catalog trust with an explicit, safe default.
+
+    A catalog entry without an explicit ``trusted`` flag is treated as
+    untrusted (``False``). This mirrors the install-time behavior used by
+    both the CLI and the admin API so the two cannot diverge.
+    """
+    return trusted is True
+
+
 def recipe_origin(source_type: str | None) -> str:
     """Return normalized recipe origin from source type."""
     if isinstance(source_type, str) and source_type in {"catalog", "git", "local"}:
@@ -844,58 +854,6 @@ def compute_tree_hash(repo_dir: Path, subdir: str | None = None) -> str | None:
         return stdout.strip() or None
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
-
-
-def fetch_remote_tree_hash(
-    source: str,
-    source_ref: str | None = None,
-    source_subdir: str | None = None,
-) -> str | None:
-    """Fetch tree hash for a recipe directory from a remote git source.
-
-    Does a lightweight fetch (``--depth 1``, ``--filter=blob:none``) to a temp
-    dir, then resolves the tree hash.  Returns ``None`` on failure.
-    """
-    with tempfile.TemporaryDirectory(prefix="web2api-hash-check-") as tmp_dir:
-        target = Path(tmp_dir) / "repo"
-        try:
-            subprocess.run(
-                ["git", "init", "--quiet", str(target)],
-                check=True,
-                text=True,
-                capture_output=True,
-            )
-            subprocess.run(
-                ["git", "-C", str(target), "remote", "add", "origin", source],
-                check=True,
-                text=True,
-                capture_output=True,
-            )
-            fetch_ref = source_ref or "HEAD"
-            subprocess.run(
-                [
-                    "git", "-C", str(target),
-                    "fetch", "--quiet", "--depth", "1", "--filter=blob:none",
-                    "origin", fetch_ref,
-                ],
-                check=True,
-                text=True,
-                capture_output=True,
-            )
-            ref = "FETCH_HEAD^{tree}"
-            if source_subdir and source_subdir not in (".", ""):
-                cleaned = source_subdir.strip("/")
-                if cleaned and cleaned != ".":
-                    ref = f"FETCH_HEAD:{cleaned}"
-            result = subprocess.run(
-                ["git", "-C", str(target), "rev-parse", ref],
-                check=True,
-                text=True,
-                capture_output=True,
-            )
-            return result.stdout.strip() or None
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return None
 
 
 def check_recipe_updates(recipes_dir: Path) -> dict[str, bool | None]:

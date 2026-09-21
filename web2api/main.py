@@ -49,6 +49,7 @@ from web2api.schemas import (
     MetadataResponse,
     PaginationResponse,
     SiteInfo,
+    status_code_for_error,
 )
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
@@ -69,20 +70,6 @@ def _env_bool(name: str, *, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _status_code_for_error(error: ErrorResponse | None) -> int:
-    """Map unified API error payloads to HTTP status codes."""
-    if error is None:
-        return 200
-    return {
-        "SITE_NOT_FOUND": 404,
-        "CAPABILITY_NOT_SUPPORTED": 400,
-        "INVALID_PARAMS": 400,
-        "SCRAPE_FAILED": 502,
-        "SCRAPE_TIMEOUT": 504,
-        "INTERNAL_ERROR": 500,
-    }.get(error.code, 500)
 
 
 def _site_payload(recipe: Recipe) -> dict[str, Any]:
@@ -126,6 +113,8 @@ def _build_error_response(
     code: ErrorCode,
     message: str,
 ) -> ApiResponse:
+    endpoint_config = recipe.config.endpoints.get(endpoint)
+    requires_query = endpoint_config.requires_query if endpoint_config is not None else False
     return ApiResponse(
         site=SiteInfo(
             name=recipe.config.name,
@@ -133,7 +122,7 @@ def _build_error_response(
             url=recipe.config.base_url,
         ),
         endpoint=endpoint,
-        query=query if recipe.config.endpoints[endpoint].requires_query else None,
+        query=query if requires_query else None,
         items=[],
         pagination=PaginationResponse(
             current_page=current_page,
@@ -309,7 +298,7 @@ async def _serve_recipe_endpoint(
     )
     return JSONResponse(
         content=response.model_dump(mode="json"),
-        status_code=_status_code_for_error(response.error),
+        status_code=status_code_for_error(response.error),
     )
 
 
@@ -666,7 +655,7 @@ def create_app(
         endpoint: str,
         page: int = Query(default=1, ge=1),
         q: str | None = Query(default=None, max_length=_MAX_QUERY_LENGTH),
-        files: list[UploadFile] = File(default=[]),
+        files: list[UploadFile] | None = File(default=None),
     ) -> JSONResponse:
         """Serve recipe endpoints with file upload support (POST multipart)."""
         registry_state: RecipeRegistry = request.app.state.registry

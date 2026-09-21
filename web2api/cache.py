@@ -105,6 +105,11 @@ class ResponseCache:
         self._refresh_tasks.add(task)
         task.add_done_callback(self._refresh_tasks.discard)
 
+    async def clear(self) -> None:
+        """Drop all cached entries (e.g., after recipes change)."""
+        async with self._lock:
+            self._entries.clear()
+
     async def stats(self) -> dict[str, int | float | bool]:
         """Return cache health and counters for diagnostics."""
         now = monotonic()
