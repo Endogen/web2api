@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from collections.abc import Mapping
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -116,19 +117,20 @@ def _read_secret_file(path_value: str) -> str | None:
     return value or None
 
 
-def load_auth_config() -> AuthConfig:
+def load_auth_config(environ: Mapping[str, str] | None = None) -> AuthConfig:
     """Load auth configuration from environment variables."""
-    file_value = os.environ.get(ACCESS_TOKEN_FILE_ENV)
-    public_path_patterns = _load_public_path_patterns(os.environ.get(PUBLIC_PATHS_ENV))
+    values = os.environ if environ is None else environ
+    file_value = values.get(ACCESS_TOKEN_FILE_ENV)
+    public_path_patterns = _load_public_path_patterns(values.get(PUBLIC_PATHS_ENV))
     token_value: str | None = None
     if file_value is not None and file_value.strip():
         token_value = _read_secret_file(file_value.strip())
-    elif ACCESS_TOKEN_ENV in os.environ:
-        raw_value = os.environ.get(ACCESS_TOKEN_ENV)
+    elif ACCESS_TOKEN_ENV in values:
+        raw_value = values.get(ACCESS_TOKEN_ENV)
         if raw_value is not None:
             token_value = raw_value.strip() or None
-    admin_value = os.environ.get(ADMIN_TOKEN_ENV, "").strip() or None
-    allow_admin = os.environ.get(ALLOW_UNAUTHENTICATED_ADMIN_ENV, "").strip().lower()
+    admin_value = values.get(ADMIN_TOKEN_ENV, "").strip() or None
+    allow_admin = values.get(ALLOW_UNAUTHENTICATED_ADMIN_ENV, "").strip().lower()
     return AuthConfig(
         access_token=token_value,
         admin_token=admin_value,

@@ -4,17 +4,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from importlib import util
-from importlib.machinery import ModuleSpec
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
-import yaml
-
-from web2api.config import RecipeConfig, parse_recipe_config
+from web2api.config import RecipeConfig
 from web2api.logging_utils import log_event
-from web2api.plugin import PluginConfig, evaluate_plugin_status, parse_plugin_config
+from web2api.plugin import PluginConfig, evaluate_plugin_status
+from web2api.recipe_loader import load_plugin_config, load_recipe_config, load_scraper
 from web2api.recipe_manager import entry_is_trusted, get_manifest_record, load_manifest
 from web2api.scraper import BaseScraper
 
@@ -168,81 +164,14 @@ class RecipeRegistry:
         *,
         manifest: dict[str, Any] | None = None,
     ) -> Recipe | None:
-        recipe_config_path = recipe_dir / "recipe.yaml"
-        if not recipe_config_path.exists():
+        if not (recipe_dir / "recipe.yaml").exists():
             return None
-
-        raw_data = yaml.safe_load(recipe_config_path.read_text(encoding="utf-8"))
-        if raw_data is None:
-            raise ValueError(f"{recipe_config_path} is empty")
-        if not isinstance(raw_data, dict):
-            raise ValueError(f"{recipe_config_path} must contain a YAML mapping")
-
-        recipe_data = {str(key): value for key, value in raw_data.items()}
-        config = parse_recipe_config(recipe_data, folder_name=recipe_dir.name)
+        config = load_recipe_config(recipe_dir)
         manifest_record = get_manifest_record(manifest or {}, config.slug)
         trusted = entry_is_trusted(manifest_record)
-        scraper = self._load_scraper(recipe_dir, trusted=trusted)
-        plugin = self._load_plugin(recipe_dir)
         return Recipe(
             config=config,
-            scraper=scraper,
+            scraper=load_scraper(recipe_dir, trusted=trusted),
             path=recipe_dir,
-            plugin=plugin,
+            plugin=load_plugin_config(recipe_dir),
         )
-
-    def _load_plugin(self, recipe_dir: Path) -> PluginConfig | None:
-        plugin_config_path = recipe_dir / "plugin.yaml"
-        if not plugin_config_path.exists():
-            return None
-
-        raw_data = yaml.safe_load(plugin_config_path.read_text(encoding="utf-8"))
-        if raw_data is None:
-            raise ValueError(f"{plugin_config_path} is empty")
-        if not isinstance(raw_data, dict):
-            raise ValueError(f"{plugin_config_path} must contain a YAML mapping")
-
-        plugin_data = {str(key): value for key, value in raw_data.items()}
-        return parse_plugin_config(plugin_data)
-
-    def _load_scraper(self, recipe_dir: Path, *, trusted: bool) -> BaseScraper | None:
-        scraper_path = recipe_dir / "scraper.py"
-        if not scraper_path.exists():
-            return None
-        if not trusted:
-            log_event(
-                logger,
-                logging.WARNING,
-                "registry.scraper_skipped_untrusted",
-                recipe_dir=recipe_dir.name,
-            )
-            logger.warning(
-                "Skipping custom scraper for untrusted recipe '%s'",
-                recipe_dir.name,
-            )
-            return None
-
-        module_name = f"_web2api_recipe_{recipe_dir.name}"
-        spec = util.spec_from_file_location(module_name, scraper_path)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"failed to load scraper module from {scraper_path}")
-
-        module = self._load_module(spec)
-        spec.loader.exec_module(module)
-
-        scraper_cls = getattr(module, "Scraper", None)
-        if scraper_cls is None:
-            raise ValueError(f"{scraper_path} must define a Scraper class")
-
-        scraper = scraper_cls()
-        if not isinstance(scraper, BaseScraper):
-            raise TypeError(f"{scraper_path} Scraper must subclass BaseScraper")
-        return scraper
-
-    @staticmethod
-    def _load_module(spec: ModuleSpec) -> ModuleType:
-        """Create a module instance for a recipe scraper spec."""
-        module = util.module_from_spec(spec)
-        if not isinstance(module, ModuleType):
-            raise ImportError("failed to create module object for scraper")
-        return module

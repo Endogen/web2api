@@ -1,6 +1,9 @@
 name: Docker E2E
 
 on:
+  pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -16,5 +19,6 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install uv==0.6.11
-      - run: uv sync --frozen --dev
+      - run: uv sync --frozen --extra dev
+      - run: uv run playwright install --with-deps chromium --only-shell
       - run: uv run pytest -m e2e tests/e2e -v

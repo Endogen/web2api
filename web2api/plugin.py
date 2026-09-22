@@ -11,8 +11,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from web2api.versions import is_numeric_version, parse_numeric_version
+
 _ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
-_NUMERIC_VERSION_PATTERN = re.compile(r"^\d+(?:\.\d+){0,2}$")
 
 
 def _normalize_deduplicated(values: list[str], *, label: str) -> list[str]:
@@ -27,15 +28,6 @@ def _normalize_deduplicated(values: list[str], *, label: str) -> list[str]:
         seen.add(value)
         normalized.append(value)
     return normalized
-
-
-def _parse_numeric_version(value: str) -> tuple[int, int, int] | None:
-    if not _NUMERIC_VERSION_PATTERN.match(value):
-        return None
-    parts = [int(part) for part in value.split(".")]
-    while len(parts) < 3:
-        parts.append(0)
-    return tuple(parts)
 
 
 def _is_python_package_available(name: str) -> bool:
@@ -65,7 +57,7 @@ class PluginCompatibility(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("version bounds must not be empty")
-        if not _NUMERIC_VERSION_PATTERN.match(normalized):
+        if not is_numeric_version(normalized):
             raise ValueError("version bounds must use numeric format (major.minor.patch)")
         return normalized
 
@@ -152,9 +144,9 @@ def _compatibility_status(
     is_compatible: bool | None = None
 
     if current_web2api_version is not None and (min_version is not None or max_version is not None):
-        current_parts = _parse_numeric_version(current_web2api_version)
-        min_parts = _parse_numeric_version(min_version) if min_version is not None else None
-        max_parts = _parse_numeric_version(max_version) if max_version is not None else None
+        current_parts = parse_numeric_version(current_web2api_version)
+        min_parts = parse_numeric_version(min_version) if min_version is not None else None
+        max_parts = parse_numeric_version(max_version) if max_version is not None else None
         if current_parts is not None and (min_parts is not None or min_version is None):
             if max_parts is not None or max_version is None:
                 is_compatible = True

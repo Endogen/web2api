@@ -92,13 +92,11 @@ def test_discovery_warns_and_skips_duplicate_slug(
     _write_recipe(recipes_dir / "first", slug="dup")
     _write_recipe(recipes_dir / "second", slug="dup")
 
-    def _parse_without_folder_match(
-        data: dict[str, object], folder_name: str | None = None
-    ) -> RecipeConfig:
-        _ = folder_name
+    def _load_without_folder_match(recipe_dir: Path) -> RecipeConfig:
+        data = yaml.safe_load((recipe_dir / "recipe.yaml").read_text(encoding="utf-8"))
         return RecipeConfig.model_validate(data)
 
-    monkeypatch.setattr("web2api.registry.parse_recipe_config", _parse_without_folder_match)
+    monkeypatch.setattr("web2api.registry.load_recipe_config", _load_without_folder_match)
 
     registry = RecipeRegistry()
     with caplog.at_level(logging.WARNING):

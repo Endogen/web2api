@@ -10,13 +10,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
-from urllib.parse import quote_plus, urljoin
+from urllib.parse import parse_qsl, quote_plus, urlencode, urljoin, urlsplit, urlunsplit
 
 from playwright.async_api import ElementHandle, Page
 
 from web2api.config import ActionConfig, EndpointConfig, FieldConfig, ItemsConfig, PaginationConfig
 from web2api.logging_utils import log_event
-from web2api.network_security import install_public_network_guard
+from web2api.network_security import validate_public_http_url
 from web2api.pool import BrowserPool
 from web2api.registry import Recipe
 from web2api.schemas import (
@@ -49,11 +49,29 @@ def build_url(endpoint: EndpointConfig, *, page: int, query: str | None = None) 
     page_zero = current_page - 1
     encoded_query = quote_plus(query or "")
 
-    return (
+    rendered = (
         endpoint.url.replace("{page}", str(mapped_page))
         .replace("{page_zero}", str(page_zero))
         .replace("{query}", encoded_query)
     )
+    pagination = endpoint.pagination
+    has_page_placeholder = "{page}" in endpoint.url or "{page_zero}" in endpoint.url
+    if (
+        pagination.type in {"page_param", "offset_param"}
+        and pagination.param
+        and not has_page_placeholder
+    ):
+        parsed = urlsplit(rendered)
+        query_pairs = [
+            (name, value)
+            for name, value in parse_qsl(parsed.query, keep_blank_values=True)
+            if name != pagination.param
+        ]
+        query_pairs.append((pagination.param, str(mapped_page)))
+        rendered = urlunsplit(
+            (parsed.scheme, parsed.netloc, parsed.path, urlencode(query_pairs), parsed.fragment)
+        )
+    return rendered
 
 
 async def execute_actions(page: Page, actions: list[ActionConfig]) -> None:
@@ -280,11 +298,7 @@ async def scrape(
                     extra_params=extra_params,
                 )
 
-        async with pool.page() as browser_page:
-            await install_public_network_guard(
-                browser_page,
-                allow_private_network=allow_private_network,
-            )
+        async with pool.page(allow_private_network=allow_private_network) as browser_page:
             custom_result = await _run_custom_scraper(
                 recipe=recipe,
                 endpoint=endpoint,
@@ -298,6 +312,11 @@ async def scrape(
                 return custom_result
 
             url = build_url(endpoint_config, page=current_page, query=query)
+            await asyncio.to_thread(
+                validate_public_http_url,
+                url,
+                allow_private_network=allow_private_network,
+            )
             await browser_page.goto(url)
             await execute_actions(browser_page, endpoint_config.actions)
             raw_items = await extract_items(

@@ -10,6 +10,7 @@ def _endpoint(
     url: str,
     *,
     pagination_type: str = "page_param",
+    pagination_param: str = "page",
     start: int = 1,
     step: int = 1,
 ) -> EndpointConfig:
@@ -24,7 +25,7 @@ def _endpoint(
             },
             "pagination": {
                 "type": pagination_type,
-                "param": "page",
+                "param": pagination_param,
                 "start": start,
                 "step": step,
             },
@@ -65,3 +66,14 @@ def test_offset_param_uses_step_size() -> None:
 
     assert build_url(endpoint, page=1) == "https://example.com/items?offset=0"
     assert build_url(endpoint, page=3) == "https://example.com/items?offset=50"
+
+
+def test_pagination_param_is_added_when_template_has_no_page_placeholder() -> None:
+    endpoint = _endpoint(
+        "https://example.com/items?sort=new&cursor=old",
+        pagination_param="cursor",
+        start=10,
+        step=10,
+    )
+
+    assert build_url(endpoint, page=3) == "https://example.com/items?sort=new&cursor=30"

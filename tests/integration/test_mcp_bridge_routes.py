@@ -277,3 +277,17 @@ async def test_mcp_call_tool_filtered_enforces_only(
     assert blocked.status_code == 404
     assert allowed.status_code == 200
     assert seen_pages == [2]
+
+
+@pytest.mark.asyncio
+async def test_mcp_filter_route_rejects_unknown_filter_type(tmp_path: Path) -> None:
+    recipes_dir = tmp_path / "recipes"
+    _write_recipe(recipes_dir, "demo")
+    app = create_app(recipes_dir=recipes_dir, pool=FakePool())
+
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.get("/mcp/invalid/demo/tools")
+
+    assert response.status_code == 422

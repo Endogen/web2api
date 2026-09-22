@@ -1,303 +1,195 @@
-"""MCP protocol server — auto-exposes all web2api recipes as native MCP tools.
-
-Each recipe endpoint becomes its own tool with proper name, description, and
-typed parameters. Tools are rebuilt automatically when recipes change.
-
-Clients connect via:
-    claude mcp add --transport http web2api https://your-host/mcp/
-"""
+"""Native MCP protocol adapter backed by canonical tool specifications."""
 
 from __future__ import annotations
 
 import inspect
 import logging
-import os
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from pydantic import Field
 
 from web2api.mcp_utils import (
-    build_tool_name,
+    ToolSpec,
     format_tool_result,
-    sites_from_registry,
+    invoke_tool_spec,
+    tool_specs_from_registry,
 )
 
 logger = logging.getLogger(__name__)
 
-# Module-level state for cross-module access (recipe admin hooks).
-_tool_registry: _ToolRegistry | None = None
+
+def _annotation_for_schema(schema: dict[str, Any]) -> Any:
+    base: Any = {
+        "string": str,
+        "integer": int,
+        "number": float,
+        "boolean": bool,
+    }.get(schema.get("type", "string"), str)
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum:
+        base = Literal.__getitem__(tuple(enum))
+    field_args: dict[str, Any] = {}
+    mapping = {
+        "description": "description",
+        "minimum": "ge",
+        "maximum": "le",
+        "pattern": "pattern",
+        "minLength": "min_length",
+        "maxLength": "max_length",
+    }
+    for source, target in mapping.items():
+        if schema.get(source) is not None:
+            field_args[target] = schema[source]
+    return Annotated[base, Field(**field_args)] if field_args else base
 
 
 class _ToolRegistry:
-    """Manages dynamic tool registration on a FastMCP server."""
+    """Manage dynamic FastMCP tools for one application instance."""
 
-    def __init__(
-        self,
-        mcp: FastMCP,
-        *,
-        app: Any,
-        bootstrap_registry: Any = None,
-    ):
+    def __init__(self, mcp: FastMCP, *, app: Any, bootstrap_registry: Any = None):
         self.mcp = mcp
         self.app = app
         self._bootstrap_registry = bootstrap_registry
         self._registered_tools: set[str] = set()
 
-    # ------------------------------------------------------------------
-    # Public
-    # ------------------------------------------------------------------
+    def _current_registry(self) -> Any:
+        live_registry = getattr(getattr(self.app, "state", None), "registry", None)
+        return live_registry if live_registry is not None else self._bootstrap_registry
 
     def build_tools(self) -> None:
-        """(Re)build MCP tools from the current recipe registry."""
+        """Rebuild tools from the application's current registry."""
         registry = self._current_registry()
         if registry is None:
             logger.warning("No recipe registry available for MCP tool build")
             return
-
-        sites = sites_from_registry(registry)
+        specs = tool_specs_from_registry(registry)
         self._clear_tools()
-        self._register_all(sites)
+        for spec in specs:
+            self._register_tool(spec)
+            self._registered_tools.add(spec.name)
         logger.info(
             "MCP tools built: %d tools from %d recipes",
-            len(self._registered_tools),
-            len(sites),
+            len(specs),
+            len({spec.slug for spec in specs}),
         )
-
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
-
-    def _current_registry(self) -> Any:
-        app_state = getattr(self.app, "state", None)
-        live_registry = getattr(app_state, "registry", None) if app_state is not None else None
-        if live_registry is not None:
-            return live_registry
-        return self._bootstrap_registry
 
     def _clear_tools(self) -> None:
         for name in list(self._registered_tools):
             try:
                 self.mcp.remove_tool(name)
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001
+                logger.debug("MCP tool was already absent: %s", name)
         self._registered_tools.clear()
 
-    def _register_all(self, sites: list[dict]) -> None:
-        for site in sites:
-            slug = site["slug"]
-            site_name = site["name"]
-            base_url = site.get("base_url", "")
+    def _register_tool(self, spec: ToolSpec) -> None:
+        properties = spec.parameters["properties"]
+        required = set(spec.parameters.get("required", []))
+        docs = []
+        for name, schema in properties.items():
+            suffix = "required" if name in required else "optional"
+            description = schema.get("description", "")
+            docs.append(f"{name}: {description} ({suffix})")
+        full_description = spec.description
+        if docs:
+            full_description += "\n\nParameters:\n" + "\n".join(
+                f"  - {line}" for line in docs
+            )
 
-            for ep in site["endpoints"]:
-                ep_name = ep["name"]
-                ep_desc = ep.get("description", "")
-                requires_q = ep.get("requires_query", False)
-                ep_params = ep.get("params", {})
-
-                tool_name = build_tool_name(slug, ep_name, ep.get("tool_name"))
-                desc = f"[{site_name}] {ep_desc}" if ep_desc else f"[{site_name}] {ep_name}"
-                if base_url:
-                    desc += f" ({base_url})"
-
-                self._register_tool(
-                    tool_name=tool_name,
-                    description=desc,
-                    slug=slug,
-                    endpoint=ep_name,
-                    requires_q=requires_q,
-                    extra_params=ep_params,
-                )
-                self._registered_tools.add(tool_name)
-
-    def _register_tool(
-        self,
-        *,
-        tool_name: str,
-        description: str,
-        slug: str,
-        endpoint: str,
-        requires_q: bool,
-        extra_params: dict[str, Any],
-    ) -> None:
-        # Capture for closure
-        _slug, _endpoint = slug, endpoint
-
-        # Build human-readable parameter docs
-        param_docs: list[str] = []
-        if requires_q:
-            param_docs.append("q: The search query or prompt (required)")
-        param_docs.append("page: 1-based page number (optional, default 1)")
-        for pname, pcfg in extra_params.items():
-            pdesc = pcfg.get("description", "")
-            suffix = " (required)" if pcfg.get("required") else " (optional)"
-            param_docs.append(f"{pname}: {pdesc}{suffix}")
-
-        full_desc = description
-        if param_docs:
-            full_desc += "\n\nParameters:\n" + "\n".join(f"  - {p}" for p in param_docs)
-
-        # --- tool function ---
-        async def _fn(**kwargs: Any) -> str:
-            page = int(kwargs.get("page", 1))
-            params: dict[str, str] = {"page": str(page)}
-            q = kwargs.get("q", "")
-            if q:
-                params["q"] = str(q)
-            for k, v in kwargs.items():
-                if k not in {"q", "page"} and v is not None and v != "":
-                    params[k] = str(v)
-
-            registry = self._current_registry()
-            if registry is None:
-                return "Error: recipe registry is unavailable"
-
-            recipe = registry.get(_slug)
-            if recipe is None:
-                return f"Error: recipe '{_slug}' was not found"
-
-            from web2api.main import execute_recipe_endpoint
-
+        async def tool_function(**kwargs: Any) -> str:
             try:
-                response = await execute_recipe_endpoint(
-                    app=self.app,
-                    recipe=recipe,
-                    endpoint_name=_endpoint,
-                    page=page,
-                    q=str(q) if q else None,
-                    query_params=params,
-                )
-            except Exception as exc:
-                logger.exception("MCP protocol tool failed: %s", tool_name)
+                response = await invoke_tool_spec(self.app, spec, kwargs)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("MCP protocol tool failed: %s", spec.name)
                 return f"Error: {exc}"
-
             return format_tool_result(response.model_dump(mode="json"))
 
-        _fn.__name__ = tool_name
-        _fn.__doc__ = full_desc
-
-        # Build typed signature so the MCP SDK generates proper JSON Schema
-        sig_params: list[inspect.Parameter] = []
+        tool_function.__name__ = spec.name
+        tool_function.__doc__ = full_description
+        parameters: list[inspect.Parameter] = []
         annotations: dict[str, Any] = {}
-        required_params: list[str] = []
-        optional_params: list[str] = []
-        parameter_types: dict[str, Any] = {
-            pname: {
-                "string": str,
-                "integer": int,
-                "number": float,
-                "boolean": bool,
-            }.get(pcfg.get("type", "string"), str)
-            for pname, pcfg in extra_params.items()
-        }
-
-        if requires_q:
-            required_params.append("q")
-        else:
-            optional_params.append("q")
-        for pname, pcfg in extra_params.items():
-            if pcfg.get("required"):
-                required_params.append(pname)
-            else:
-                optional_params.append(pname)
-
-        for pname in required_params:
-            annotation = parameter_types.get(pname, str)
-            sig_params.append(
+        extra_names = [name for name in properties if name not in {"q", "page"}]
+        ordered_names = []
+        if "q" in required:
+            ordered_names.append("q")
+        ordered_names.extend(name for name in extra_names if name in required)
+        if "q" not in required:
+            ordered_names.append("q")
+        ordered_names.extend(name for name in extra_names if name not in required)
+        ordered_names.append("page")
+        for name in ordered_names:
+            schema = properties[name]
+            annotation = _annotation_for_schema(schema)
+            default = inspect.Parameter.empty if name in required else schema.get("default")
+            parameters.append(
                 inspect.Parameter(
-                    pname,
-                    inspect.Parameter.KEYWORD_ONLY,
-                    annotation=annotation,
-                )
-            )
-            annotations[pname] = annotation
-        optional_params.append("page")
-        for pname in optional_params:
-            annotation = int if pname == "page" else parameter_types.get(pname, str)
-            default: Any = 1 if pname == "page" else ""
-            sig_params.append(
-                inspect.Parameter(
-                    pname,
+                    name,
                     inspect.Parameter.KEYWORD_ONLY,
                     default=default,
                     annotation=annotation,
                 )
             )
-            annotations[pname] = annotation
-        _fn.__signature__ = inspect.Signature(parameters=sig_params, return_annotation=str)
-        _fn.__annotations__ = {**annotations, "return": str}
-
-        self.mcp.tool(name=tool_name, description=full_desc)(_fn)
-
-
-# ----------------------------------------------------------------------
-# Public API
-# ----------------------------------------------------------------------
-
-def rebuild_mcp_tools() -> None:
-    """Rebuild MCP tools from current recipes. Call after recipe changes."""
-    if _tool_registry is not None:
-        _tool_registry.build_tools()
+            annotations[name] = annotation
+        tool_function.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+            parameters=parameters,
+            return_annotation=str,
+        )
+        tool_function.__annotations__ = {**annotations, "return": str}
+        self.mcp.tool(name=spec.name, description=full_description)(tool_function)
 
 
-def mount_mcp_server(app: Any, registry: Any = None) -> None:
-    """Mount the MCP protocol server onto a FastAPI app at ``/mcp``.
+def rebuild_mcp_tools(app: Any) -> None:
+    """Rebuild native MCP tools for one application instance."""
+    registry = getattr(getattr(app, "state", None), "mcp_tool_registry", None)
+    if registry is not None:
+        registry.build_tools()
 
-    Args:
-        app: The FastAPI application instance.
-        registry: A populated ``RecipeRegistry`` to read recipes from.
-    """
-    global _tool_registry
 
-    allowed_hosts = [
-        value.strip()
-        for value in os.environ.get(
-            "WEB2API_MCP_ALLOWED_HOSTS",
-            "127.0.0.1,127.0.0.1:*,localhost,localhost:*,[::1],[::1]:*,testserver",
-        ).split(",")
-        if value.strip()
-    ]
-    allowed_origins = [
-        value.strip()
-        for value in os.environ.get(
-            "WEB2API_MCP_ALLOWED_ORIGINS",
-            "http://127.0.0.1,http://127.0.0.1:*,http://localhost,http://localhost:*",
-        ).split(",")
-        if value.strip()
-    ]
+def mount_mcp_server(
+    app: Any,
+    registry: Any = None,
+    *,
+    allowed_hosts: tuple[str, ...] = (
+        "127.0.0.1",
+        "127.0.0.1:*",
+        "localhost",
+        "localhost:*",
+        "[::1]",
+        "[::1]:*",
+        "testserver",
+    ),
+    allowed_origins: tuple[str, ...] = (
+        "http://127.0.0.1",
+        "http://127.0.0.1:*",
+        "http://localhost",
+        "http://localhost:*",
+    ),
+) -> None:
+    """Mount an application-scoped MCP protocol server at ``/mcp``."""
     mcp = FastMCP(
         "Web2API",
         instructions=(
             "Web2API exposes websites as API tools via live browser scraping. "
-            "Each tool maps to a specific recipe endpoint. Tools are named "
-            "{recipe}__{endpoint}. Use them directly — they are fully "
-            "self-describing with typed parameters."
+            "Each tool maps to a recipe endpoint and is fully self-describing."
         ),
         streamable_http_path="/",
         stateless_http=True,
         transport_security=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
-            allowed_hosts=allowed_hosts,
-            allowed_origins=allowed_origins,
+            allowed_hosts=list(allowed_hosts),
+            allowed_origins=list(allowed_origins),
         ),
     )
-
-    _tool_registry = _ToolRegistry(
-        mcp,
-        app=app,
-        bootstrap_registry=registry,
-    )
-
-    # Build tools now (registry is already populated at this point).
-    _tool_registry.build_tools()
-
-    # The MCP session manager must run within the app's lifespan.
-    from contextlib import asynccontextmanager
+    tool_registry = _ToolRegistry(mcp, app=app, bootstrap_registry=registry)
+    app.state.mcp_tool_registry = tool_registry
+    tool_registry.build_tools()
 
     original_lifespan = getattr(app.router, "lifespan_context", None)
 
     @asynccontextmanager
-    async def mcp_lifespan(a):
+    async def mcp_lifespan(a: Any):
         async with mcp.session_manager.run():
             if original_lifespan is not None:
                 async with original_lifespan(a) as state:
@@ -306,7 +198,5 @@ def mount_mcp_server(app: Any, registry: Any = None) -> None:
                 yield
 
     app.router.lifespan_context = mcp_lifespan
-
-    mcp_app = mcp.streamable_http_app()
-    app.mount("/mcp", mcp_app)
+    app.mount("/mcp", mcp.streamable_http_app())
     logger.info("MCP protocol server mounted at /mcp")

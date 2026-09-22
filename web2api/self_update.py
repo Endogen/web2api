@@ -13,9 +13,10 @@ from pathlib import Path
 from shutil import which
 from typing import Literal
 
+from web2api.versions import parse_numeric_version
+
 UpdateMethod = Literal["auto", "pip", "git", "docker"]
 ResolvedUpdateMethod = Literal["pip", "git", "docker"]
-_VERSION_PATTERN = re.compile(r"^\d+(?:\.\d+){0,2}$")
 _SEMVER_TAG_PATTERN = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
@@ -28,15 +29,6 @@ class UpdateCheck:
     method: ResolvedUpdateMethod
     update_available: bool | None
     latest_git_tag: str | None = None
-
-
-def _parse_numeric_version(value: str) -> tuple[int, int, int] | None:
-    if not _VERSION_PATTERN.match(value):
-        return None
-    parts = [int(part) for part in value.split(".")]
-    while len(parts) < 3:
-        parts.append(0)
-    return tuple(parts)
 
 
 def detect_update_method(cwd: Path | None = None) -> ResolvedUpdateMethod:
@@ -90,8 +82,8 @@ def check_for_updates(
     latest_git_tag = resolve_latest_git_tag(cwd) if resolved_method == "git" else None
     update_available: bool | None = None
     if latest_version is not None:
-        current_parts = _parse_numeric_version(current_version)
-        latest_parts = _parse_numeric_version(latest_version)
+        current_parts = parse_numeric_version(current_version)
+        latest_parts = parse_numeric_version(latest_version)
         if current_parts is not None and latest_parts is not None:
             update_available = latest_parts > current_parts
 

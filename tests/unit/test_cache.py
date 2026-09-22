@@ -94,3 +94,28 @@ async def test_cache_triggers_background_refresh_for_stale_entry() -> None:
     assert refreshed.response is not None
     assert refreshed.response.metadata.item_count == 99
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_does_not_allow_in_flight_refresh_to_restore_entry() -> None:
+    cache = ResponseCache(ttl_seconds=0.03, stale_ttl_seconds=1.0, max_entries=8)
+    key = ("example", "read", 1, None, ())
+    await cache.set(key, _response(item_count=1))
+    await asyncio.sleep(0.04)
+
+    refresh_started = asyncio.Event()
+    finish_refresh = asyncio.Event()
+
+    async def refresher() -> ApiResponse:
+        refresh_started.set()
+        await finish_refresh.wait()
+        return _response(item_count=99)
+
+    await cache.trigger_refresh(key, refresher)
+    await refresh_started.wait()
+    await cache.clear()
+    finish_refresh.set()
+    await asyncio.sleep(0)
+
+    assert (await cache.get(key)).state == "miss"
+    assert (await cache.stats())["entries"] == 0

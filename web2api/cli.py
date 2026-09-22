@@ -13,6 +13,7 @@ import typer
 
 from web2api import __version__
 from web2api.recipe_manager import (
+    RecipeEntry,
     SourceType,
     build_dockerfile_snippet,
     build_entry_payload,
@@ -34,6 +35,7 @@ from web2api.recipe_manager import (
     resolve_catalog_recipes,
     resolve_managed_recipe_source,
     resolve_recipe_folder,
+    resolve_recipe_path,
     resolve_recipes_dir,
     resolve_source_type,
     run_commands,
@@ -179,6 +181,93 @@ def recipes_list(
             typer.echo(f"  error: {item['error']}")
 
 
+def _doctor_entry_report(
+    entry: RecipeEntry,
+    *,
+    run_healthchecks: bool,
+    allow_untrusted: bool,
+    healthcheck_timeout: float,
+) -> dict[str, object]:
+    trusted = entry_is_trusted(entry.manifest_record)
+    plugin_status = (
+        metadata_status_payload(entry.plugin, app_version=__version__)
+        if entry.plugin is not None
+        else None
+    )
+    healthcheck: dict[str, Any] | None = None
+    if entry.plugin is not None and run_healthchecks:
+        if not trusted and not allow_untrusted and entry.plugin.healthcheck is not None:
+            healthcheck = {
+                "defined": True,
+                "ran": False,
+                "ok": None,
+                "skipped": "untrusted recipe; pass --allow-untrusted to run healthcheck",
+            }
+        elif trusted or allow_untrusted:
+            healthcheck = run_healthcheck(
+                entry.plugin,
+                timeout_seconds=healthcheck_timeout,
+            )
+    return {
+        "slug": entry.slug,
+        "enabled": entry.enabled,
+        "trusted": trusted,
+        "plugin": plugin_status,
+        "healthcheck": healthcheck,
+        "error": entry.error,
+    }
+
+
+def _echo_doctor_report(report: list[dict[str, object]]) -> None:
+    for item in report:
+        slug = str(item["slug"])
+        trust_label = "trusted" if item["trusted"] else "untrusted"
+        if not item["enabled"]:
+            typer.echo(f"{slug}: disabled ({trust_label})")
+            continue
+        plugin = item["plugin"]
+        if not isinstance(plugin, dict):
+            typer.echo(f"{slug}: no plugin.yaml ({trust_label})")
+            continue
+        status = plugin.get("status")
+        if not isinstance(status, dict):
+            typer.echo(f"{slug}: metadata status unavailable ({trust_label})")
+            continue
+        typer.echo(f"{slug}: ready={status.get('ready')} ({trust_label})")
+        checks = status.get("checks")
+        if isinstance(checks, dict):
+            for name in ("env", "commands", "python"):
+                detail = checks.get(name)
+                missing = detail.get("missing", []) if isinstance(detail, dict) else []
+                if missing:
+                    typer.echo(f"  missing {name}: {', '.join(str(v) for v in missing)}")
+
+        health = item["healthcheck"]
+        if isinstance(health, dict) and health.get("defined"):
+            if health.get("skipped"):
+                typer.echo(f"  healthcheck: skipped ({health['skipped']})")
+            elif health.get("ok") is True:
+                typer.echo("  healthcheck: ok")
+            elif health.get("ok") is False:
+                typer.echo(f"  healthcheck: failed (exit_code={health.get('exit_code')})")
+                stderr = str(health.get("stderr") or "").strip()
+                if stderr:
+                    typer.echo(f"  healthcheck stderr: {stderr.splitlines()[0]}")
+
+
+def _doctor_report_failed(report: list[dict[str, object]]) -> bool:
+    for item in report:
+        plugin = item["plugin"]
+        if isinstance(plugin, dict):
+            status = plugin.get("status")
+            if isinstance(status, dict) and status.get("ready") is False:
+                return True
+        health = item.get("healthcheck")
+        if isinstance(health, dict) and health.get("defined") and health.get("ok") is False:
+            return True
+    return False
+
+
 @recipes_app.command("doctor")
 def recipes_doctor(
     slug: str | None = typer.Argument(default=None, help="Recipe slug (optional)."),
@@ -210,7 +299,6 @@ def recipes_doctor(
 ) -> None:
     """Show recipe metadata readiness details and optional healthcheck results."""
     entries = discover_recipe_entries(_recipes_dir_option(recipes_dir))
-
     if slug is not None:
         selected = find_recipe_entry(entries, slug)
         entries = [selected] if selected is not None else []
@@ -218,93 +306,20 @@ def recipes_doctor(
         typer.echo("No matching recipes found.", err=True)
         raise typer.Exit(code=1)
 
-    report: list[dict[str, object]] = []
-    for entry in entries:
-        trusted = entry_is_trusted(entry.manifest_record)
-        status_payload = None
-        if entry.plugin is not None:
-            status_payload = metadata_status_payload(entry.plugin, app_version=__version__)
-
-        healthcheck_payload: dict[str, Any] | None = None
-        if entry.plugin is not None and run_healthchecks:
-            if not trusted and not allow_untrusted:
-                if entry.plugin.healthcheck is not None:
-                    healthcheck_payload = {
-                        "defined": True,
-                        "ran": False,
-                        "ok": None,
-                        "skipped": "untrusted recipe; pass --allow-untrusted to run healthcheck",
-                    }
-            else:
-                healthcheck_payload = run_healthcheck(
-                    entry.plugin,
-                    timeout_seconds=healthcheck_timeout,
-                )
-
-        report.append(
-            {
-                "slug": entry.slug,
-                "enabled": entry.enabled,
-                "trusted": trusted,
-                "plugin": status_payload,
-                "healthcheck": healthcheck_payload,
-                "error": entry.error,
-            }
+    report = [
+        _doctor_entry_report(
+            entry,
+            run_healthchecks=run_healthchecks,
+            allow_untrusted=allow_untrusted,
+            healthcheck_timeout=healthcheck_timeout,
         )
-
+        for entry in entries
+    ]
     if json_output:
         typer.echo(json.dumps(report, indent=2, sort_keys=True))
     else:
-        for item in report:
-            slug_value = str(item["slug"])
-            trusted = "trusted" if item["trusted"] else "untrusted"
-            if not item["enabled"]:
-                typer.echo(f"{slug_value}: disabled ({trusted})")
-                continue
-            metadata_block = item["plugin"]
-            if not isinstance(metadata_block, dict):
-                typer.echo(f"{slug_value}: no plugin.yaml ({trusted})")
-                continue
-            status = metadata_block.get("status")
-            if not isinstance(status, dict):
-                typer.echo(f"{slug_value}: metadata status unavailable ({trusted})")
-                continue
-            ready = status.get("ready")
-            typer.echo(f"{slug_value}: ready={ready} ({trusted})")
-            checks = status.get("checks")
-            if isinstance(checks, dict):
-                for name in ("env", "commands", "python"):
-                    detail = checks.get(name)
-                    if isinstance(detail, dict):
-                        missing = detail.get("missing", [])
-                        if missing:
-                            typer.echo(f"  missing {name}: {', '.join(str(v) for v in missing)}")
-
-            health = item["healthcheck"]
-            if isinstance(health, dict) and health.get("defined"):
-                if health.get("skipped"):
-                    typer.echo(f"  healthcheck: skipped ({health['skipped']})")
-                elif health.get("ok") is True:
-                    typer.echo("  healthcheck: ok")
-                elif health.get("ok") is False:
-                    exit_code = health.get("exit_code")
-                    typer.echo(f"  healthcheck: failed (exit_code={exit_code})")
-                    stderr = str(health.get("stderr") or "").strip()
-                    if stderr:
-                        typer.echo(f"  healthcheck stderr: {stderr.splitlines()[0]}")
-
-    failed = False
-    for item in report:
-        metadata_block = item["plugin"]
-        if isinstance(metadata_block, dict):
-            status = metadata_block.get("status")
-            if isinstance(status, dict) and status.get("ready") is False:
-                failed = True
-
-        health = item.get("healthcheck")
-        if isinstance(health, dict) and health.get("defined") and health.get("ok") is False:
-            failed = True
-    if failed:
+        _echo_doctor_report(report)
+    if _doctor_report_failed(report):
         raise typer.Exit(code=1)
 
 
@@ -576,7 +591,11 @@ def recipes_uninstall(
         raise typer.Exit(code=1)
 
     folder = resolve_recipe_folder(slug=slug, entry=entry, manifest_record=manifest_record)
-    recipe_path = target_dir / folder
+    try:
+        recipe_path = resolve_recipe_path(target_dir, folder)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
     _confirm_or_exit(
         f"Uninstall recipe '{slug}' (folder: {recipe_path})?",
         yes=yes,

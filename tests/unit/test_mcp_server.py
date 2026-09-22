@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Annotated, get_args, get_origin
 
 from web2api.config import RecipeConfig
 from web2api.mcp_server import _ToolRegistry
@@ -84,5 +85,6 @@ def test_mcp_tool_signature_marks_required_extra_params_as_required() -> None:
     assert params[1].kind == inspect.Parameter.KEYWORD_ONLY
     assert params[1].default == ""
     assert params[2].name == "page"
-    assert params[2].annotation is int
+    assert get_origin(params[2].annotation) is Annotated
+    assert get_args(params[2].annotation)[0] is int
     assert params[2].default == 1

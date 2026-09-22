@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -26,8 +27,11 @@ from web2api.recipe_manager import (
     resolve_catalog_recipes,
     resolve_managed_recipe_source,
     resolve_recipe_folder,
+    resolve_recipe_path,
 )
 from web2api.registry import RecipeRegistry
+
+logger = logging.getLogger(__name__)
 
 
 def _discover_registry(
@@ -63,9 +67,9 @@ async def _reload_registry_and_tools(app: FastAPI, *, app_version: str) -> None:
     # Rebuild MCP tools so connected clients see the change
     try:
         from web2api.mcp_server import rebuild_mcp_tools
-        rebuild_mcp_tools()
+        rebuild_mcp_tools(app)
     except Exception:
-        pass  # MCP server may not be mounted
+        logger.exception("Failed to rebuild MCP tools after recipe reload")
 
 
 def register_recipe_admin_routes(app: FastAPI, *, app_version: str) -> None:
@@ -271,11 +275,13 @@ def register_recipe_admin_routes(app: FastAPI, *, app_version: str) -> None:
                     detail=f"recipe '{slug}' is not tracked in manifest (pass force=true)",
                 )
 
-            recipe_path = recipes_dir / resolve_recipe_folder(
-                slug=slug,
-                entry=entry,
-                manifest_record=manifest_record,
+            folder = resolve_recipe_folder(
+                slug=slug, entry=entry, manifest_record=manifest_record
             )
+            try:
+                recipe_path = resolve_recipe_path(recipes_dir, folder)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             if recipe_path.exists():
                 shutil.rmtree(recipe_path)
             removed = remove_manifest_record(recipes_dir, slug)

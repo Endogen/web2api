@@ -330,7 +330,7 @@ async def test_api_routes_and_index(
         for record in caplog.records
     )
 
-    assert fake_pool.started is True
+    assert fake_pool.started is False
     assert fake_pool.stopped is True
 
 
@@ -934,8 +934,81 @@ async def test_post_upload_rejects_path_traversal_filenames(
     assert isinstance(file_paths, list)
     assert len(file_paths) == 1
     uploaded_path = Path(str(file_paths[0]))
-    assert uploaded_path.name == escaped_name
+    assert uploaded_path.name.endswith(f"_{escaped_name}")
     assert "/../" not in str(uploaded_path)
+
+
+@pytest.mark.asyncio
+async def test_post_upload_keeps_colliding_sanitized_names_distinct(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recipes_dir = tmp_path / "recipes"
+    _write_recipe(
+        recipes_dir,
+        "alpha",
+        endpoints={
+            "read": {
+                "url": "https://example.com/items?page={page}",
+                "accepts_files": True,
+                "items": {
+                    "container": ".item",
+                    "fields": {"title": {"selector": ".title"}},
+                },
+                "pagination": {"type": "page_param", "param": "page"},
+            },
+        },
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_scrape(
+        *,
+        pool: FakePool,
+        recipe,
+        endpoint: str,
+        page: int = 1,
+        query: str | None = None,
+        extra_params: dict[str, str] | None = None,
+        scrape_timeout: float = 30.0,
+        direct_semaphore: asyncio.Semaphore | None = None,
+        allow_private_network: bool = False,
+    ) -> ApiResponse:
+        _ = (
+            pool,
+            recipe,
+            endpoint,
+            page,
+            query,
+            scrape_timeout,
+            direct_semaphore,
+            allow_private_network,
+        )
+        paths = [Path(path) for path in (extra_params or {}).get("file_paths", [])]
+        captured["names"] = [path.name for path in paths]
+        captured["contents"] = [path.read_bytes() for path in paths]
+        captured["paths"] = paths
+        return _success_response(slug="alpha", endpoint="read", page=1)
+
+    monkeypatch.setattr("web2api.main.scrape", fake_scrape)
+    app = create_app(recipes_dir=recipes_dir, pool=FakePool())
+
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/alpha/read",
+                files=[
+                    ("files", ("a?.txt", b"first", "text/plain")),
+                    ("files", ("a*.txt", b"second", "text/plain")),
+                ],
+            )
+
+    assert response.status_code == 200
+    names = captured["names"]
+    assert isinstance(names, list)
+    assert len(names) == len(set(names)) == 2
+    assert captured["contents"] == [b"first", b"second"]
+    assert all(not path.exists() for path in captured["paths"])
 
 
 @pytest.mark.asyncio
@@ -1009,7 +1082,7 @@ async def test_check_updates_endpoint(
             return subprocess.CompletedProcess(command_list, 0, stdout="bbb222\n", stderr="")
         return subprocess.CompletedProcess(command_list, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("web2api.recipe_manager.subprocess.run", _fake_run)
+    monkeypatch.setattr("web2api.recipe_install.subprocess.run", _fake_run)
 
     catalog_file = tmp_path / "catalog.yaml"
     catalog_file.write_text(yaml.safe_dump({"recipes": {}}), encoding="utf-8")

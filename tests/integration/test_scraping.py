@@ -110,8 +110,13 @@ class FakePool:
         self.page_calls = 0
 
     @asynccontextmanager
-    async def page(self, timeout: float | None = None) -> AsyncIterator[FakePage]:
-        _ = timeout
+    async def page(
+        self,
+        timeout: float | None = None,
+        *,
+        allow_private_network: bool = False,
+    ) -> AsyncIterator[FakePage]:
+        _ = timeout, allow_private_network
         self.page_calls += 1
         yield self._page
 

@@ -12,6 +12,8 @@ import yaml
 from web2api.plugin import parse_plugin_config
 from web2api.recipe_manager import (
     OFFICIAL_RECIPES_REPO_URL,
+    RecipeEntry,
+    build_entry_payload,
     build_install_commands,
     check_recipe_updates,
     compute_tree_hash,
@@ -29,6 +31,8 @@ from web2api.recipe_manager import (
     record_recipe_install,
     remove_manifest_record,
     resolve_catalog_recipes,
+    resolve_recipe_path,
+    resolve_recipe_source_dir,
     save_manifest,
 )
 
@@ -182,7 +186,7 @@ def test_copy_recipe_overwrite_keeps_old_recipe_when_staging_fails(
         _ = source, destination
         raise OSError("copy failed")
 
-    monkeypatch.setattr("web2api.recipe_manager.shutil.copytree", _fail_copytree)
+    monkeypatch.setattr("web2api.recipe_install.shutil.copytree", _fail_copytree)
 
     with pytest.raises(OSError, match="copy failed"):
         copy_recipe_into_recipes_dir(new_recipe, tmp_path / "recipes", overwrite=True)
@@ -193,6 +197,56 @@ def test_copy_recipe_overwrite_keeps_old_recipe_when_staging_fails(
 def test_missing_manifest_record_is_untrusted() -> None:
     assert entry_is_trusted(None) is False
     assert entry_is_trusted({}) is False
+
+
+def test_unmanaged_recipe_payload_defaults_to_untrusted(tmp_path: Path) -> None:
+    entry = RecipeEntry(
+        slug="local",
+        folder="local",
+        path=tmp_path / "local",
+        enabled=True,
+        has_recipe=True,
+        plugin=None,
+    )
+
+    assert build_entry_payload(entry, app_version="0.7.0")["trusted"] is False
+
+
+@pytest.mark.parametrize("folder", ["../victim", "nested/victim", "/tmp/victim", ".."])
+def test_resolve_recipe_path_rejects_non_child_folders(
+    tmp_path: Path,
+    folder: str,
+) -> None:
+    with pytest.raises(ValueError, match="invalid recipe folder"):
+        resolve_recipe_path(tmp_path / "recipes", folder)
+
+
+def test_resolve_recipe_path_rejects_symlink_outside_recipes(tmp_path: Path) -> None:
+    recipes_dir = tmp_path / "recipes"
+    recipes_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (recipes_dir / "linked").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="escapes recipes directory"):
+        resolve_recipe_path(recipes_dir, "linked")
+
+
+def test_resolve_recipe_source_dir_rejects_escape(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    outside = tmp_path / "outside"
+    _write_recipe(outside)
+
+    with pytest.raises(ValueError, match="escapes source root"):
+        resolve_recipe_source_dir(source_root, "../outside")
+
+
+def test_resolve_recipe_source_dir_allows_explicit_root_subdir(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    _write_recipe(source_root)
+
+    assert resolve_recipe_source_dir(source_root, ".") == source_root.resolve()
 
 
 def test_discovery_entry_includes_manifest_record(tmp_path: Path) -> None:
@@ -334,7 +388,7 @@ def test_resolve_catalog_recipes_sparse_checkout_for_remote_catalog(
                 )
         return subprocess.CompletedProcess(command_list, 0)
 
-    monkeypatch.setattr("web2api.recipe_manager.subprocess.run", _fake_run)
+    monkeypatch.setattr("web2api.recipe_install.subprocess.run", _fake_run)
 
     specs = resolve_catalog_recipes(catalog_source="https://example.com/catalog.git")
 
@@ -396,7 +450,7 @@ def test_install_recipe_from_source_sparse_checkout_for_subdir(
                 _write_recipe(source_recipe_dir)
         return subprocess.CompletedProcess(command_list, 0)
 
-    monkeypatch.setattr("web2api.recipe_manager.subprocess.run", _fake_run)
+    monkeypatch.setattr("web2api.recipe_install.subprocess.run", _fake_run)
 
     slug, source_type = install_recipe_from_source(
         source="https://example.com/recipes.git",
@@ -456,6 +510,58 @@ def test_install_recipe_from_source_rejects_invalid_trusted_scraper(tmp_path: Pa
             recipes_dir=tmp_path / "recipes",
             trusted=True,
         )
+
+
+def test_install_validation_does_not_execute_trusted_scraper(tmp_path: Path) -> None:
+    source_recipe = tmp_path / "source-recipe"
+    _write_recipe(source_recipe)
+    (source_recipe / "scraper.py").write_text(
+        "raise RuntimeError('must not execute during install')\nclass Scraper:\n    pass\n",
+        encoding="utf-8",
+    )
+
+    slug, _ = install_recipe_from_source(
+        source=str(source_recipe),
+        recipes_dir=tmp_path / "recipes",
+        trusted=True,
+    )
+
+    assert slug == "source-recipe"
+
+
+def test_install_rolls_back_recipe_when_manifest_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recipes_dir = tmp_path / "recipes"
+    old_recipe = recipes_dir / "alpha"
+    _write_recipe(old_recipe)
+    (old_recipe / "marker.txt").write_text("old", encoding="utf-8")
+
+    source_recipe = tmp_path / "replacement"
+    _write_recipe(source_recipe)
+    source_payload = yaml.safe_load((source_recipe / "recipe.yaml").read_text(encoding="utf-8"))
+    source_payload["slug"] = "alpha"
+    (source_recipe / "recipe.yaml").write_text(
+        yaml.safe_dump(source_payload),
+        encoding="utf-8",
+    )
+
+    def _fail_manifest(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        del args, kwargs
+        raise OSError("manifest write failed")
+
+    monkeypatch.setattr("web2api.recipe_install.record_recipe_install", _fail_manifest)
+
+    with pytest.raises(OSError, match="manifest write failed"):
+        install_recipe_from_source(
+            source=str(source_recipe),
+            recipes_dir=recipes_dir,
+            trusted=True,
+            overwrite=True,
+        )
+
+    assert (old_recipe / "marker.txt").read_text(encoding="utf-8") == "old"
 
 
 def test_compute_tree_hash_in_git_repo(tmp_path: Path) -> None:
@@ -575,7 +681,7 @@ def test_check_recipe_updates_match(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             return subprocess.CompletedProcess(command_list, 0, stdout="aaa111\n", stderr="")
         return subprocess.CompletedProcess(command_list, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("web2api.recipe_manager.subprocess.run", _fake_run)
+    monkeypatch.setattr("web2api.recipe_install.subprocess.run", _fake_run)
 
     result = check_recipe_updates(recipes_dir)
     assert result["alpha"] is False
@@ -610,7 +716,7 @@ def test_check_recipe_updates_differ(tmp_path: Path, monkeypatch: pytest.MonkeyP
             return subprocess.CompletedProcess(command_list, 0, stdout="bbb222\n", stderr="")
         return subprocess.CompletedProcess(command_list, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("web2api.recipe_manager.subprocess.run", _fake_run)
+    monkeypatch.setattr("web2api.recipe_install.subprocess.run", _fake_run)
 
     result = check_recipe_updates(recipes_dir)
     assert result["alpha"] is True

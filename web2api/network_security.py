@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-import os
 import socket
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
-from playwright.async_api import Page
+from playwright.async_api import BrowserContext
+
+from web2api.settings import env_bool
 
 AddressResolver = Callable[..., list[tuple[Any, ...]]]
 
@@ -21,12 +22,7 @@ class UnsafeOutboundURL(ValueError):
 
 def private_network_access_enabled() -> bool:
     """Return whether the explicit private-network escape hatch is enabled."""
-    return os.environ.get("WEB2API_ALLOW_PRIVATE_NETWORK", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return env_bool("WEB2API_ALLOW_PRIVATE_NETWORK", default=False)
 
 
 async def validate_httpx_request(request: Any) -> None:
@@ -45,7 +41,10 @@ def validate_public_http_url(
     resolver: AddressResolver = socket.getaddrinfo,
 ) -> str:
     """Validate an HTTP(S) URL and reject local or non-global destinations."""
-    parsed = urlsplit(url)
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise UnsafeOutboundURL("outbound URL is malformed") from exc
     if parsed.scheme not in {"http", "https"}:
         raise UnsafeOutboundURL("only http and https outbound URLs are allowed")
     if parsed.username is not None or parsed.password is not None:
@@ -86,17 +85,46 @@ def validate_public_http_url(
     return url
 
 
+def validate_public_websocket_url(
+    url: str,
+    *,
+    allow_private_network: bool = False,
+    resolver: AddressResolver = socket.getaddrinfo,
+) -> str:
+    """Validate a WebSocket URL using the same host policy as HTTP requests."""
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise UnsafeOutboundURL("WebSocket URL is malformed") from exc
+    if parsed.scheme not in {"ws", "wss"}:
+        raise UnsafeOutboundURL("only ws and wss WebSocket URLs are allowed")
+    http_scheme = "https" if parsed.scheme == "wss" else "http"
+    http_url = urlunsplit(
+        (http_scheme, parsed.netloc, parsed.path, parsed.query, parsed.fragment)
+    )
+    validate_public_http_url(
+        http_url,
+        allow_private_network=allow_private_network,
+        resolver=resolver,
+    )
+    return url
+
+
 async def install_public_network_guard(
-    page: Page,
+    context: BrowserContext,
     *,
     allow_private_network: bool = False,
 ) -> None:
-    """Guard every Playwright HTTP request, including redirect targets."""
+    """Guard HTTP and WebSocket traffic for every page in a browser context."""
 
     async def _guard(route: Any, request: Any) -> None:
         url = str(request.url)
-        if not url.startswith(("http://", "https://")):
+        scheme = urlsplit(url).scheme.lower()
+        if scheme in {"about", "blob", "data"}:
             await route.continue_()
+            return
+        if scheme not in {"http", "https"}:
+            await route.abort("blockedbyclient")
             return
         try:
             await asyncio.to_thread(
@@ -107,6 +135,46 @@ async def install_public_network_guard(
         except UnsafeOutboundURL:
             await route.abort("blockedbyclient")
             return
-        await route.continue_()
+        if allow_private_network:
+            await route.continue_()
+            return
 
-    await page.route("**/*", _guard)
+        # Chromium does not necessarily re-run route handlers for a redirect
+        # followed by the network stack. Fetch one hop, validate Location, and
+        # fulfill the hop so no unvalidated redirect can reach the browser.
+        try:
+            response = await route.fetch(max_redirects=0)
+        except Exception:  # noqa: BLE001 - a failed fetch must settle the route
+            await route.abort("failed")
+            return
+        try:
+            location = response.headers.get("location")
+            if location:
+                redirect_url = urljoin(url, location)
+                try:
+                    await asyncio.to_thread(
+                        validate_public_http_url,
+                        redirect_url,
+                        allow_private_network=False,
+                    )
+                except UnsafeOutboundURL:
+                    await route.abort("blockedbyclient")
+                    return
+            await route.fulfill(response=response)
+        finally:
+            await response.dispose()
+
+    async def _guard_websocket(web_socket: Any) -> None:
+        try:
+            await asyncio.to_thread(
+                validate_public_websocket_url,
+                str(web_socket.url),
+                allow_private_network=allow_private_network,
+            )
+        except UnsafeOutboundURL:
+            await web_socket.close(code=1008, reason="blocked by outbound network policy")
+            return
+        web_socket.connect_to_server()
+
+    await context.route("**/*", _guard)
+    await context.route_web_socket("**/*", _guard_websocket)

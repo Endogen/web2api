@@ -30,7 +30,7 @@ for optional dependency/runtime metadata inside a recipe.
 - **Declarative YAML recipes** with selectors, actions, transforms, and pagination
 - **Custom Python scrapers** for interactive sites (e.g. typing text, waiting for dynamic content)
 - **Optional plugin metadata** (`plugin.yaml`) for recipe-specific dependency requirements
-- **Shared browser/context pool** for concurrent Playwright requests
+- **Lazy shared browser with isolated per-request contexts** for concurrent requests
 - **In-memory response cache** with stale-while-revalidate
 - **Unified JSON response schema** across all recipes and endpoints
 - **Docker deployment** with auto-restart
@@ -566,6 +566,8 @@ endpoints:
 
 Pagination notes:
 `{page}` resolves to `start + ((api_page - 1) * step)`.
+When neither `{page}` nor `{page_zero}` appears in the URL, `pagination.param` is added to (or
+replaces the same key in) the query string automatically. This also applies to `offset_param`.
 
 Extra parameters support `type` (`string`, `integer`, `number`, `boolean`), `required`, `enum`,
 `minimum`, `maximum`, `pattern`, `min_length`, `max_length`, and `example`. These constraints are
@@ -622,9 +624,18 @@ class Scraper(BaseScraper):
 
 For a direct HTTP or CLI implementation, set `requires_browser = False`; its `page` argument is
 then `None` and it runs under the bounded direct-executor semaphore instead of consuming a browser
-context. Browser and direct outbound HTTP requests reject loopback, private, link-local, and
-reserved destinations by default. Operators can explicitly allow internal providers with
+context. Declarative requests receive a fresh browser context, so cookies, storage, sessions, and
+cache are not shared between callers. The outbound guard is installed before a page is created and
+covers HTTP redirects, frames, popups, and WebSockets; service workers are disabled. Browser and
+direct outbound HTTP requests reject loopback, private, link-local, and reserved destinations by
+default. Operators can explicitly allow internal providers with
 `WEB2API_ALLOW_PRIVATE_NETWORK=true`.
+
+Application-level hostname checks reduce accidental and recipe-driven SSRF, but they are not a
+replacement for a production network boundary. For hostile recipes or multi-tenant deployments,
+also restrict container/host egress with a firewall or an allowlisting proxy. Set
+`WEB2API_BROWSER_PROXY` to route Chromium through that proxy; standard `HTTP_PROXY` and
+`HTTPS_PROXY` variables cover compatible direct HTTP clients.
 
 ### Plugin Metadata (Optional)
 
@@ -670,10 +681,10 @@ Environment variables (with defaults):
 | Variable | Default | Description |
 |---|---|---|
 | `POOL_MAX_CONTEXTS` | 5 | Max browser contexts in pool |
-| `POOL_CONTEXT_TTL` | 50 | Requests per context before recycling |
 | `POOL_ACQUIRE_TIMEOUT` | 30 | Seconds to wait for a context |
 | `POOL_PAGE_TIMEOUT` | 15000 | Page navigation timeout (ms) |
 | `POOL_QUEUE_SIZE` | 20 | Max queued requests |
+| `WEB2API_BROWSER_PROXY` | empty | Optional Chromium proxy server URL |
 | `SCRAPE_TIMEOUT` | 30 | Overall scrape timeout (seconds) |
 | `DIRECT_MAX_CONCURRENCY` | 20 | Maximum concurrent direct HTTP/CLI scraper calls |
 | `CACHE_ENABLED` | true | Enable in-memory response caching |
@@ -697,6 +708,11 @@ Environment variables (with defaults):
 | `WEB2API_MCP_ALLOWED_ORIGINS` | local origins | Allowed MCP Origin patterns |
 | `BIRD_AUTH_TOKEN` | empty | X/Twitter auth token for `x` recipe |
 | `BIRD_CT0` | empty | X/Twitter ct0 token for `x` recipe |
+
+The Docker image runs as the unprivileged `web2api` user. The Compose service also uses a
+read-only root filesystem, a writable `/tmp` tmpfs, no Linux capabilities, and
+`no-new-privileges`. Ensure a bind-mounted recipes directory is writable by UID/GID 1000, or
+override the image build arguments to match the deployment host.
 
 ## Testing
 

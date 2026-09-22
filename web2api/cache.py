@@ -52,6 +52,7 @@ class ResponseCache:
         self._stores = 0
         self._evictions = 0
         self._refresh_tasks: set[asyncio.Task[None]] = set()
+        self._generation = 0
 
     async def get(self, key: CacheKey) -> CacheLookup:
         """Look up a cache entry and classify it as fresh/stale/miss."""
@@ -100,14 +101,16 @@ class ResponseCache:
             if entry is None or entry.refreshing:
                 return
             entry.refreshing = True
+            generation = self._generation
 
-        task = asyncio.create_task(self._run_refresh(key, refresher))
+        task = asyncio.create_task(self._run_refresh(key, refresher, generation))
         self._refresh_tasks.add(task)
         task.add_done_callback(self._refresh_tasks.discard)
 
     async def clear(self) -> None:
         """Drop all cached entries (e.g., after recipes change)."""
         async with self._lock:
+            self._generation += 1
             self._entries.clear()
 
     async def stats(self) -> dict[str, int | float | bool]:
@@ -133,11 +136,24 @@ class ResponseCache:
         self,
         key: CacheKey,
         refresher: Callable[[], Awaitable[ApiResponse]],
+        generation: int,
     ) -> None:
         try:
             refreshed = await refresher()
             if refreshed.error is None:
-                await self.set(key, refreshed)
+                now = monotonic()
+                entry = _CacheEntry(
+                    response=refreshed.model_copy(deep=True),
+                    expires_at=now + self.ttl_seconds,
+                    stale_until=now + self.ttl_seconds + self.stale_ttl_seconds,
+                )
+                async with self._lock:
+                    if generation == self._generation and self.ttl_seconds > 0:
+                        self._purge_expired_unlocked(now)
+                        self._entries[key] = entry
+                        self._entries.move_to_end(key)
+                        self._stores += 1
+                        self._trim_to_capacity_unlocked()
         finally:
             async with self._lock:
                 entry = self._entries.get(key)

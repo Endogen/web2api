@@ -1,131 +1,40 @@
-"""MCP HTTP bridge — auto-exposes all web2api recipes as MCP tools.
-
-This is the legacy HTTP bridge for non-MCP clients and the web UI.
-For MCP protocol clients, use the server at ``/mcp/`` instead.
-
-Endpoints:
-    GET  /mcp/tools          → list all recipe endpoints as tool definitions
-    POST /mcp/tools/{name}   → call a tool (routes to the matching recipe endpoint)
-"""
+"""Legacy HTTP adapter for canonical Web2API MCP tools."""
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from web2api.mcp_utils import build_tool_name
+from web2api.mcp_utils import (
+    ToolSpec,
+    invoke_tool_spec,
+    resolve_tool_spec,
+    tool_result_value,
+    tool_specs_from_registry,
+)
 from web2api.registry import RecipeRegistry
 from web2api.schemas import status_code_for_error
 
 logger = logging.getLogger(__name__)
+FilterType = Literal["only", "exclude"]
 
 
-def _resolve_tool(registry: RecipeRegistry, tool_name: str) -> tuple[str | None, str | None]:
-    """Resolve a tool name to (slug, endpoint_name).
-
-    Matches by recomputing each endpoint's tool name via ``build_tool_name``,
-    which handles both custom ``tool_name`` overrides and the standard
-    ``{slug}__{endpoint}`` convention — robust to slugs/endpoints that
-    themselves contain underscores. Legacy single-underscore names remain
-    accepted for existing clients.
-    """
-    for recipe in registry.list_all():
-        slug = recipe.config.slug
-        for ep_name, ep_cfg in recipe.config.endpoints.items():
-            if build_tool_name(slug, ep_name, ep_cfg.tool_name) == tool_name:
-                return slug, ep_name
-
-    # Legacy single-underscore names for backward compatibility.
-    for recipe in registry.list_all():
-        for ep_name in recipe.config.endpoints:
-            if tool_name == f"{recipe.config.slug}_{ep_name}":
-                return recipe.config.slug, ep_name
-
-    return None, None
-
-
-def _build_tool_parameters(endpoint_cfg: Any) -> dict[str, Any]:
-    """Build a JSON Schema for the tool's input parameters."""
-    properties: dict[str, Any] = {
-        "page": {
-            "type": "integer",
-            "minimum": 1,
-            "default": 1,
-            "description": "1-based result page.",
-        }
-    }
-    required: list[str] = []
-
-    if endpoint_cfg.requires_query:
-        properties["q"] = {
-            "type": "string",
-            "description": "The search query or prompt.",
-        }
-        required.append("q")
-
-    for param_name, param_cfg in endpoint_cfg.params.items():
-        prop: dict[str, Any] = {"type": param_cfg.type}
-        if param_cfg.description:
-            prop["description"] = param_cfg.description
-        if param_cfg.example is not None:
-            prop["examples"] = [param_cfg.example]
-        for field in ("enum", "minimum", "maximum", "pattern"):
-            value = getattr(param_cfg, field)
-            if value is not None:
-                prop[field] = value
-        if param_cfg.min_length is not None:
-            prop["minLength"] = param_cfg.min_length
-        if param_cfg.max_length is not None:
-            prop["maxLength"] = param_cfg.max_length
-        properties[param_name] = prop
-        if param_cfg.required:
-            required.append(param_name)
-
-    schema: dict[str, Any] = {
-        "type": "object",
-        "properties": properties,
-        "additionalProperties": False,
-    }
-    if required:
-        schema["required"] = required
-
-    return schema
-
-
-def _tool_slug(registry: RecipeRegistry, tool_name: str) -> str | None:
-    """Get the recipe slug for a tool name (handles custom names)."""
-    slug, _ = _resolve_tool(registry, tool_name)
-    return slug
-
-
-def _tools_from_registry(registry: RecipeRegistry) -> list[dict[str, Any]]:
-    """Generate MCP tool definitions from all registered recipes."""
-    tools: list[dict[str, Any]] = []
-
-    for recipe in registry.list_all():
-        slug = recipe.config.slug
-        site_name = recipe.config.name
-
-        for ep_name, ep_cfg in recipe.config.endpoints.items():
-            tool_name = build_tool_name(slug, ep_name, ep_cfg.tool_name)
-            description = ep_cfg.description or f"{site_name} — {ep_name}"
-            description = f"[{site_name}] {description}"
-
-            tools.append({
-                "name": tool_name,
-                "description": description,
-                "parameters": _build_tool_parameters(ep_cfg),
-                "slug": slug,
-            })
-
-    return tools
+def _filter_specs(
+    specs: list[ToolSpec],
+    *,
+    filter_type: FilterType,
+    slugs: set[str],
+) -> list[ToolSpec]:
+    if filter_type == "only":
+        return [spec for spec in specs if spec.slug in slugs]
+    return [spec for spec in specs if spec.slug not in slugs]
 
 
 def register_mcp_routes(app: FastAPI) -> None:
-    """Register the MCP HTTP bridge routes on the app."""
+    """Register the HTTP compatibility adapter for MCP tools."""
 
     @app.get("/mcp/tools")
     async def mcp_list_tools(
@@ -133,161 +42,81 @@ def register_mcp_routes(app: FastAPI) -> None:
         only: str | None = None,
         exclude: str | None = None,
     ) -> list[dict[str, Any]]:
-        """List all recipe endpoints as MCP tool definitions.
-
-        Query params:
-            only: comma-separated slugs to include (whitelist)
-            exclude: comma-separated slugs to exclude (blacklist)
-        """
         registry: RecipeRegistry = request.app.state.registry
-        tools = _tools_from_registry(registry)
-
-        only_set = {s.strip() for s in only.split(",") if s.strip()} if only else None
-        exclude_set = {s.strip() for s in exclude.split(",") if s.strip()} if exclude else None
-
-        if only_set:
-            tools = [t for t in tools if _tool_slug(registry, t["name"]) in only_set]
-        if exclude_set:
-            tools = [t for t in tools if _tool_slug(registry, t["name"]) not in exclude_set]
-
-        return tools
+        specs = tool_specs_from_registry(registry)
+        if only:
+            specs = _filter_specs(
+                specs,
+                filter_type="only",
+                slugs={slug.strip() for slug in only.split(",") if slug.strip()},
+            )
+        if exclude:
+            specs = _filter_specs(
+                specs,
+                filter_type="exclude",
+                slugs={slug.strip() for slug in exclude.split(",") if slug.strip()},
+            )
+        return [spec.as_http_payload() for spec in specs]
 
     @app.get("/mcp/{filter_type}/{filter_value}/tools")
     async def mcp_list_tools_filtered(
         request: Request,
-        filter_type: str,
+        filter_type: FilterType,
         filter_value: str,
     ) -> list[dict[str, Any]]:
-        """List tools with path-based filtering.
-
-        Examples:
-            /mcp/only/brave-search,deepl/tools
-            /mcp/exclude/allenai/tools
-        """
         registry: RecipeRegistry = request.app.state.registry
-        tools = _tools_from_registry(registry)
-
-        slugs = {s.strip() for s in filter_value.split(",") if s.strip()}
-
-        if filter_type == "only":
-            tools = [t for t in tools if _tool_slug(registry, t["name"]) in slugs]
-        elif filter_type == "exclude":
-            tools = [t for t in tools if _tool_slug(registry, t["name"]) not in slugs]
-
-        return tools
+        specs = _filter_specs(
+            tool_specs_from_registry(registry),
+            filter_type=filter_type,
+            slugs={slug.strip() for slug in filter_value.split(",") if slug.strip()},
+        )
+        return [spec.as_http_payload() for spec in specs]
 
     @app.post("/mcp/{filter_type}/{filter_value}/tools/{tool_name}")
     async def mcp_call_tool_filtered(
         request: Request,
-        filter_type: str,
+        filter_type: FilterType,
         filter_value: str,
         tool_name: str,
     ) -> JSONResponse:
-        """Call a tool via the filtered MCP path, enforcing the filter."""
         registry: RecipeRegistry = request.app.state.registry
-        slugs = {s.strip() for s in filter_value.split(",") if s.strip()}
-        tool_slug = _tool_slug(registry, tool_name)
-
-        if filter_type == "only" and (tool_slug is None or tool_slug not in slugs):
+        spec = resolve_tool_spec(registry, tool_name)
+        slugs = {slug.strip() for slug in filter_value.split(",") if slug.strip()}
+        if spec is None or (filter_type == "only" and spec.slug not in slugs):
             raise HTTPException(status_code=404, detail=f"Tool not found: {tool_name}")
-        if filter_type == "exclude" and tool_slug is not None and tool_slug in slugs:
+        if filter_type == "exclude" and spec.slug in slugs:
             raise HTTPException(status_code=404, detail=f"Tool not found: {tool_name}")
-
-        return await mcp_call_tool(request, tool_name)
+        return await _call_tool(request, spec)
 
     @app.post("/mcp/tools/{tool_name}")
-    async def mcp_call_tool(
-        request: Request,
-        tool_name: str,
-    ) -> JSONResponse:
-        """Call a recipe endpoint as an MCP tool.
-
-        Accepts a JSON body with the tool parameters (e.g. ``{"q": "..."}``)
-        and returns ``{"result": ...}`` with the scraped data.
-        """
+    async def mcp_call_tool(request: Request, tool_name: str) -> JSONResponse:
         registry: RecipeRegistry = request.app.state.registry
-        slug, endpoint_name = _resolve_tool(registry, tool_name)
-        if slug is None:
+        spec = resolve_tool_spec(registry, tool_name)
+        if spec is None:
             raise HTTPException(status_code=404, detail=f"Tool not found: {tool_name}")
+        return await _call_tool(request, spec)
 
-        recipe = registry.get(slug)
-        if recipe is None:
-            raise HTTPException(status_code=404, detail=f"Recipe not found for tool: {tool_name}")
 
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
+async def _call_tool(request: Request, spec: ToolSpec) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="request body must be valid JSON") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
 
-        if not isinstance(body, dict):
-            body = {}
+    try:
+        response = await invoke_tool_spec(request.app, spec, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("MCP tool call failed: %s", spec.name)
+        return JSONResponse({"result": f"Error: {exc}"}, status_code=500)
 
-        query = body.pop("q", None) or body.pop("query", None)
-        raw_page = body.pop("page", 1)
-        try:
-            page = int(raw_page)
-            if page < 1:
-                raise ValueError
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="page must be an integer >= 1") from None
-
-        from web2api.main import execute_recipe_endpoint
-
-        params: dict[str, str] = {"page": str(page)}
-        if query:
-            params["q"] = str(query)
-        for k, v in body.items():
-            params[k] = str(v)
-
-        try:
-            response = await execute_recipe_endpoint(
-                app=request.app,
-                recipe=recipe,
-                endpoint_name=endpoint_name,
-                page=page,
-                q=str(query) if query is not None else None,
-                query_params=params,
-            )
-
-            response_data = response.model_dump(mode="json")
-            items = response_data.get("items", [])
-            error = response_data.get("error")
-
-            if error:
-                return JSONResponse(
-                    {"result": f"Error: {error.get('message', 'unknown error')}"},
-                    status_code=status_code_for_error(response.error),
-                )
-
-            if len(items) == 1:
-                fields = items[0].get("fields", {})
-                for key in ("response", "answer", "text", "content", "result"):
-                    if key in fields:
-                        return JSONResponse({"result": fields[key]})
-                return JSONResponse({"result": fields or items[0]})
-            elif items:
-                simplified = []
-                for item in items:
-                    entry: dict[str, Any] = {}
-                    if item.get("title"):
-                        entry["title"] = item["title"]
-                    if item.get("url"):
-                        entry["url"] = item["url"]
-                    if item.get("fields"):
-                        entry.update(item["fields"])
-                    simplified.append(entry)
-                return JSONResponse({"result": simplified})
-            else:
-                return JSONResponse({"result": "No results found."})
-
-        except HTTPException as exc:
-            return JSONResponse(
-                {"result": f"Error: {exc.detail}"},
-                status_code=exc.status_code,
-            )
-        except Exception as exc:
-            logger.exception("MCP tool call failed: %s", tool_name)
-            return JSONResponse(
-                {"result": f"Error: {exc}"},
-                status_code=500,
-            )
+    response_data = response.model_dump(mode="json")
+    return JSONResponse(
+        {"result": tool_result_value(response_data)},
+        status_code=status_code_for_error(response.error),
+    )
