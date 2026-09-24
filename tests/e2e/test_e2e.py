@@ -165,6 +165,14 @@ def dockerized_web2api() -> Iterator[str]:
         yield base_url
     finally:
         if started:
+            # Captured output is only reported by pytest when the test fails.
+            logs_result = _run_compose(
+                compose_cmd,
+                ["logs", "--no-color", "--tail", "200"],
+                env=env,
+                check=False,
+            )
+            print(f"docker compose logs:\n{logs_result.stdout}{logs_result.stderr}")
             _run_compose(
                 compose_cmd,
                 ["down", "--volumes", "--remove-orphans"],

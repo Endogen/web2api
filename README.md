@@ -711,8 +711,10 @@ Environment variables (with defaults):
 
 The Docker image runs as the unprivileged `web2api` user. The Compose service also uses a
 read-only root filesystem, a writable `/tmp` tmpfs, no Linux capabilities, and
-`no-new-privileges`. Ensure a bind-mounted recipes directory is writable by UID/GID 1000, or
-override the image build arguments to match the deployment host.
+`no-new-privileges`. Installed recipes live in the named volume `recipes`, which Docker
+initializes with the correct ownership. If you replace it with a bind mount, make sure the host
+directory is writable by UID/GID 1000, or override the image build arguments to match the
+deployment host.
 
 ## Testing
 
